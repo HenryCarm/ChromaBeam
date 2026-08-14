@@ -19,8 +19,8 @@ from PyQt6.QtWidgets import (
     QLabel, QPushButton, QSlider, QComboBox, QFileDialog, QFrame,
     QProgressBar, QGroupBox, QTabWidget, QTextEdit, QRadioButton, QButtonGroup
 )
-from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal
-from PyQt6.QtGui import QImage, QPixmap, QPainter, QColor, QFont
+from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal, QSettings
+from PyQt6.QtGui import QImage, QPixmap, QPainter, QColor, QFont, QIcon
 
 APP_DIR = os.path.dirname(os.path.abspath(sys.argv[0] if sys.argv[0] else __file__))
 sys.path.insert(0, APP_DIR)
@@ -227,6 +227,10 @@ class UnifiedChromaBeamApp(QMainWindow):
         self.resize(980, 740)
         self.setMinimumSize(900, 660)
 
+        icon_path = os.path.join(APP_DIR, "assets", "icon.png")
+        if os.path.exists(icon_path):
+            self.setWindowIcon(QIcon(icon_path))
+
         self.setStyleSheet("""
             QMainWindow { background-color: #0b0f14; }
             QWidget { color: #e6edf3; font-family: 'Segoe UI', sans-serif; font-size: 13px; }
@@ -251,10 +255,13 @@ class UnifiedChromaBeamApp(QMainWindow):
             QLabel#stat_val { font-family: 'Consolas', 'Courier New', monospace; font-size: 14px; font-weight: bold; color: #7ee787; }
         """)
 
-        # Sender state
-        self.grid_size = 32
-        self.color_mode = MODE_1BIT_BW # Default to Potato Mode B&W
-        self.target_fps = 15
+        # Settings & Preference Persistence
+        self.settings = QSettings("ChromaBeam", "ChromaBeam")
+
+        # Sender state (Defaults to 64x64 1-bit B&W)
+        self.grid_size = int(self.settings.value("grid_size", 64))
+        self.color_mode = int(self.settings.value("color_mode", MODE_1BIT_BW))
+        self.target_fps = int(self.settings.value("target_fps", 15))
         self.is_streaming = False
         self.file_data = None
         self.filename = "None"
@@ -276,7 +283,7 @@ class UnifiedChromaBeamApp(QMainWindow):
         self.timer.start(int(1000 / self.target_fps))
 
         self._load_demo_payload()
-        self._apply_preset('potato')
+        self._sync_ui_to_state()
 
     def _init_ui(self):
         tabs = QTabWidget(self)
@@ -307,19 +314,19 @@ class UnifiedChromaBeamApp(QMainWindow):
         right = QVBoxLayout()
         right.setSpacing(10)
 
-        # 1. Grandma Presets
-        preset_grp = QGroupBox("1. Transmission Presets (Grandma Mode)")
+        # 1. 2026 Clean Transmission Presets
+        preset_grp = QGroupBox("1. Speed & Mode Presets")
         pr_layout = QHBoxLayout(preset_grp)
 
-        self.btn_potato = QPushButton("🛡️ Potato Camera\n1-Bit B&W (Max Reliability)")
+        self.btn_potato = QPushButton("🛡️ 1-Bit B&W (Default)\n~25 KB/s • Ultra-Reliable")
         self.btn_potato.setObjectName("preset_btn")
         self.btn_potato.clicked.connect(lambda: self._apply_preset('potato'))
 
-        self.btn_balanced = QPushButton("⚖️ Balanced\n4-Color (Recommended)")
+        self.btn_balanced = QPushButton("⚡ 4-Color Mode\n~60 KB/s • 2x Faster ⚡")
         self.btn_balanced.setObjectName("preset_btn")
         self.btn_balanced.clicked.connect(lambda: self._apply_preset('balanced'))
 
-        self.btn_turbo = QPushButton("⚡ Turbo Speed\n8-Color RGB (550 KB/s)")
+        self.btn_turbo = QPushButton("🚀 8-Color Turbo\n~120+ KB/s • 3x Turbo 🚀")
         self.btn_turbo.setObjectName("preset_btn")
         self.btn_turbo.clicked.connect(lambda: self._apply_preset('turbo'))
 
@@ -328,11 +335,11 @@ class UnifiedChromaBeamApp(QMainWindow):
         pr_layout.addWidget(self.btn_turbo)
         right.addWidget(preset_grp)
 
-        # 2. File Selection
-        file_grp = QGroupBox("2. Payload Selection")
+        # 2. File Selection Card
+        file_grp = QGroupBox("2. Payload File")
         fl = QVBoxLayout(file_grp)
-        self.file_lbl = QLabel("File: chromabeam_sample.bin")
-        self.size_lbl = QLabel("Size: 64 KB | Blocks: 168")
+        self.file_lbl = QLabel("File: chromabeam_sample_64kb.bin")
+        self.size_lbl = QLabel("Size: 64.0 KB | Ready to Beam")
         btn_row = QHBoxLayout()
         b1 = QPushButton("📁 Choose File...")
         b1.clicked.connect(self._select_file)
@@ -345,14 +352,24 @@ class UnifiedChromaBeamApp(QMainWindow):
         fl.addLayout(btn_row)
         right.addWidget(file_grp)
 
-        # 3. Pro Mode Accordion
-        self.pro_box = QGroupBox("⚙️ Advanced Parameters (Pro)")
+        # 3. 2026 Simplistic Collapsible Pro Section (Hidden by Default!)
+        self.btn_toggle_pro = QPushButton("⚙️ Advanced Parameters (Pro) ▼")
+        self.btn_toggle_pro.setStyleSheet("text-align: left; background-color: transparent; border: none; color: #58a6ff; font-weight: bold; padding: 4px 0;")
+        self.btn_toggle_pro.clicked.connect(self._toggle_pro_view)
+        right.addWidget(self.btn_toggle_pro)
+
+        self.pro_box = QGroupBox("Fine-Grained Optical Tuning")
+        self.pro_box.setVisible(False)
         pl = QVBoxLayout(self.pro_box)
 
         mode_row = QHBoxLayout()
         mode_row.addWidget(QLabel("Color Depth:"))
         self.mode_combo = QComboBox()
-        self.mode_combo.addItems(["1-bit Monochrome (Black & White)", "2-bit 4-Color (K, R, G, W)", "3-bit 8-Color (JAB RGB)"])
+        self.mode_combo.addItems([
+            "1-Bit B&W (~25 KB/s)",
+            "2-Bit 4-Color (~60 KB/s ⚡)",
+            "3-Bit 8-Color (~120+ KB/s 🚀)"
+        ])
         self.mode_combo.currentIndexChanged.connect(self._on_mode_changed)
         mode_row.addWidget(self.mode_combo)
         pl.addLayout(mode_row)
@@ -360,7 +377,13 @@ class UnifiedChromaBeamApp(QMainWindow):
         grid_row = QHBoxLayout()
         grid_row.addWidget(QLabel("Matrix Density:"))
         self.grid_combo = QComboBox()
-        self.grid_combo.addItems(["32x32 (Ultra Large)", "48x48 (Balanced)", "64x64 (High Density)"])
+        self.density_options = [32, 48, 64, 128, 256, 512, 1024, 2048]
+        for opt in self.density_options:
+            label = f"{opt}x{opt}"
+            if opt == 64: label += " (Default)"
+            elif opt == 32: label += " (Ultra Large)"
+            elif opt >= 1024: label += " (Experimental)"
+            self.grid_combo.addItem(label)
         self.grid_combo.currentIndexChanged.connect(self._on_grid_changed)
         grid_row.addWidget(self.grid_combo)
         pl.addLayout(grid_row)
@@ -397,38 +420,36 @@ class UnifiedChromaBeamApp(QMainWindow):
         right.addStretch()
         layout.addLayout(right, stretch=2)
 
-    def _apply_preset(self, preset):
+    def _toggle_pro_view(self):
+        is_visible = not self.pro_box.isVisible()
+        self.pro_box.setVisible(is_visible)
+        self.btn_toggle_pro.setText("⚙️ Advanced Parameters (Pro) ▲" if is_visible else "⚙️ Advanced Parameters (Pro) ▼")
+
+    def _sync_ui_to_state(self):
+        # Update preset buttons active state
         for btn in [self.btn_potato, self.btn_balanced, self.btn_turbo]:
             btn.setProperty("active", "false")
 
-        if preset == 'potato':
+        if self.color_mode == MODE_1BIT_BW and self.grid_size == 64:
             self.btn_potato.setProperty("active", "true")
-            self.color_mode = MODE_1BIT_BW
-            self.grid_size = 32
-            self.target_fps = 15
-        elif preset == 'balanced':
+        elif self.color_mode == MODE_2BIT_4COLOR and self.grid_size == 48:
             self.btn_balanced.setProperty("active", "true")
-            self.color_mode = MODE_2BIT_4COLOR
-            self.grid_size = 48
-            self.target_fps = 25
-        elif preset == 'turbo':
+        elif self.color_mode == MODE_3BIT_8COLOR and self.grid_size == 64:
             self.btn_turbo.setProperty("active", "true")
-            self.color_mode = MODE_3BIT_8COLOR
-            self.grid_size = 64
-            self.target_fps = 45
 
         for btn in [self.btn_potato, self.btn_balanced, self.btn_turbo]:
             btn.style().unpolish(btn)
             btn.style().polish(btn)
 
-        # Sync Pro controls
         self.mode_combo.blockSignals(True)
-        self.mode_combo.setCurrentIndex(self.color_mode)
+        self.mode_combo.setCurrentIndex(min(self.color_mode, self.mode_combo.count() - 1))
         self.mode_combo.blockSignals(False)
 
-        self.grid_combo.blockSignals(True)
-        self.grid_combo.setCurrentIndex(0 if self.grid_size == 32 else (1 if self.grid_size == 48 else 2))
-        self.grid_combo.blockSignals(False)
+        if self.grid_size in self.density_options:
+            idx = self.density_options.index(self.grid_size)
+            self.grid_combo.blockSignals(True)
+            self.grid_combo.setCurrentIndex(idx)
+            self.grid_combo.blockSignals(False)
 
         self.fps_slider.setValue(self.target_fps)
         self.fps_lbl.setText(f"FPS: {self.target_fps}")
@@ -437,6 +458,28 @@ class UnifiedChromaBeamApp(QMainWindow):
         self.layout_engine = ColorMatrixLayout(grid_size=self.grid_size, color_mode=self.color_mode)
         if self.file_data:
             self._set_payload(self.file_data, self.filename)
+
+    def _save_settings(self):
+        self.settings.setValue("grid_size", self.grid_size)
+        self.settings.setValue("color_mode", self.color_mode)
+        self.settings.setValue("target_fps", self.target_fps)
+
+    def _apply_preset(self, preset):
+        if preset == 'potato':
+            self.color_mode = MODE_1BIT_BW
+            self.grid_size = 64  # Default 64x64 B&W
+            self.target_fps = 15
+        elif preset == 'balanced':
+            self.color_mode = MODE_2BIT_4COLOR
+            self.grid_size = 48
+            self.target_fps = 25
+        elif preset == 'turbo':
+            self.color_mode = MODE_3BIT_8COLOR
+            self.grid_size = 64
+            self.target_fps = 45
+
+        self._save_settings()
+        self._sync_ui_to_state()
 
     def _build_receiver_tab(self, parent):
         layout = QHBoxLayout(parent)
@@ -559,21 +602,20 @@ class UnifiedChromaBeamApp(QMainWindow):
 
     def _on_mode_changed(self, index: int):
         self.color_mode = index
-        self.layout_engine = ColorMatrixLayout(grid_size=self.grid_size, color_mode=self.color_mode)
-        if self.file_data:
-            self._set_payload(self.file_data, self.filename)
+        self._save_settings()
+        self._sync_ui_to_state()
 
     def _on_grid_changed(self, index: int):
-        sizes = [32, 48, 64]
-        self.grid_size = sizes[index]
-        self.layout_engine = ColorMatrixLayout(grid_size=self.grid_size, color_mode=self.color_mode)
-        if self.file_data:
-            self._set_payload(self.file_data, self.filename)
+        if index >= 0 and index < len(self.density_options):
+            self.grid_size = self.density_options[index]
+            self._save_settings()
+            self._sync_ui_to_state()
 
     def _on_fps_changed(self, val: int):
         self.target_fps = val
         self.fps_lbl.setText(f"FPS: {self.target_fps}")
         self.timer.setInterval(int(1000 / self.target_fps))
+        self._save_settings()
 
     def _toggle_stream(self):
         self.is_streaming = not self.is_streaming

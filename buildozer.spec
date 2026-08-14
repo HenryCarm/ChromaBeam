@@ -15,6 +15,12 @@ source.dir = .
 # (list) Source files to include (let empty to include all the files)
 source.include_exts = py,png,jpg,kv,atlas,html,js,css,json
 
+# (str) Icon of the application
+icon.filename = %(source.dir)s/assets/icon.png
+
+# (str) Presplash of the application
+presplash.filename = %(source.dir)s/assets/icon.png
+
 # (str) Application versioning
 version = 1.0.0
 
@@ -22,7 +28,7 @@ version = 1.0.0
 android.numeric_version = 2680317
 
 # (list) Application requirements
-requirements = python3,kivy,opencv,numpy,requests,android
+requirements = python3,kivy,opencv,numpy,requests,android,pillow,qrcode
 
 # (list) Permissions
 android.permissions = CAMERA,READ_EXTERNAL_STORAGE,WRITE_EXTERNAL_STORAGE,MANAGE_EXTERNAL_STORAGE,INTERNET,ACCESS_NETWORK_STATE

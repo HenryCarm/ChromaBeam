@@ -4,8 +4,22 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ChromaBeam — High-Speed Optical File Transfer Protocol</title>
-    <meta name="description" content="Ultra-fast optical file transfer through multi-mode animated matrix fountain codes across air-gapped screens and cameras.">
+    <link rel="icon" type="image/png" href="favicon.png">
+    <link rel="shortcut icon" href="favicon.ico">
     <link rel="stylesheet" href="style.css">
+    <style>
+        .fullscreen-canvas {
+            position: fixed !important;
+            top: 0;
+            left: 0;
+            width: 100vw !important;
+            height: 100vh !important;
+            object-fit: contain;
+            background-color: #000;
+            z-index: 9999;
+            cursor: pointer;
+        }
+    </style>
 </head>
 <body>
     <header>
@@ -31,30 +45,31 @@
                     <span class="card-title">Transmission Matrix Canvas</span>
                     <button class="btn btn-secondary" onclick="toggleSenderFullscreen()" style="padding: 4px 10px; font-size: 12px;">⛶ Fullscreen</button>
                 </div>
-                <div id="senderCanvasContainer" class="canvas-wrapper">
-                    <canvas id="senderCanvas" width="480" height="480"></canvas>
+                <!-- Main Sender Canvas -->
+                <div style="flex: 1; display: flex; justify-content: center; align-items: center; min-height: 400px;">
+                    <canvas id="senderCanvas" width="512" height="512" onclick="toggleSenderFullscreen()" style="max-width: 100%; max-height: 500px; cursor: pointer;"></canvas>
                 </div>
                 <button id="senderStreamBtn" class="btn btn-primary btn-lg" onclick="toggleSenderStream()">🚀 START OPTICAL BEAM</button>
             </div>
 
             <!-- Right: Settings & Telemetry -->
             <div class="card">
-                <span class="card-title">1. Transmission Presets (Grandma Mode)</span>
+                <span class="card-title">1. Transmission Presets</span>
                 <div class="preset-grid">
                     <div id="preset_potato" class="preset-card active" onclick="applyPreset('potato')">
                         <div class="preset-icon">🛡️</div>
-                        <div class="preset-name">Potato Camera</div>
-                        <div class="preset-sub">1-Bit B&W (Max Reliability)</div>
+                        <div class="preset-name">1-Bit B&W (Default)</div>
+                        <div class="preset-sub">~25 KB/s • Max Reliability</div>
                     </div>
                     <div id="preset_balanced" class="preset-card" onclick="applyPreset('balanced')">
-                        <div class="preset-icon">⚖️</div>
-                        <div class="preset-name">Balanced</div>
-                        <div class="preset-sub">4-Color (Recommended)</div>
+                        <div class="preset-icon">⚡</div>
+                        <div class="preset-name">4-Color Mode</div>
+                        <div class="preset-sub">~60 KB/s • 2x Faster ⚡</div>
                     </div>
                     <div id="preset_turbo" class="preset-card" onclick="applyPreset('turbo')">
-                        <div class="preset-icon">⚡</div>
-                        <div class="preset-name">Turbo Speed</div>
-                        <div class="preset-sub">8-Color RGB (550 KB/s)</div>
+                        <div class="preset-icon">🚀</div>
+                        <div class="preset-name">8-Color Turbo</div>
+                        <div class="preset-sub">~120+ KB/s • 3x Faster 🚀</div>
                     </div>
                 </div>
 
@@ -91,6 +106,11 @@
                             <option value="32" selected>32x32 (Ultra Large Cells)</option>
                             <option value="48">48x48 (Balanced)</option>
                             <option value="64">64x64 (High Density)</option>
+                            <option value="128">128x128 (Ultra Density)</option>
+                            <option value="256">256x256 (Extreme Density)</option>
+                            <option value="512">512x512 (Max Density)</option>
+                            <option value="1024">1024x1024 (Experimental 1K)</option>
+                            <option value="2048">2048x2048 (Experimental 2K)</option>
                         </select>
                     </div>
 

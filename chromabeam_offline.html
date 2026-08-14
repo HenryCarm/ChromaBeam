@@ -4,7 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ChromaBeam — High-Speed Optical File Transfer Protocol</title>
-    <meta name="description" content="Ultra-fast optical file transfer through multi-mode animated matrix fountain codes across air-gapped screens and cameras.">
+    <link rel="icon" type="image/png" href="favicon.png">
+    <link rel="shortcut icon" href="favicon.ico">
     <style>
 /* ChromaBeam Web & Mobile Stylesheet */
 :root {
@@ -422,6 +423,19 @@ select, input[type="range"] {
 
 
 </style>
+    <style>
+        .fullscreen-canvas {
+            position: fixed !important;
+            top: 0;
+            left: 0;
+            width: 100vw !important;
+            height: 100vh !important;
+            object-fit: contain;
+            background-color: #000;
+            z-index: 9999;
+            cursor: pointer;
+        }
+    </style>
 </head>
 <body>
     <header>
@@ -447,30 +461,31 @@ select, input[type="range"] {
                     <span class="card-title">Transmission Matrix Canvas</span>
                     <button class="btn btn-secondary" onclick="toggleSenderFullscreen()" style="padding: 4px 10px; font-size: 12px;">⛶ Fullscreen</button>
                 </div>
-                <div id="senderCanvasContainer" class="canvas-wrapper">
-                    <canvas id="senderCanvas" width="480" height="480"></canvas>
+                <!-- Main Sender Canvas -->
+                <div style="flex: 1; display: flex; justify-content: center; align-items: center; min-height: 400px;">
+                    <canvas id="senderCanvas" width="512" height="512" onclick="toggleSenderFullscreen()" style="max-width: 100%; max-height: 500px; cursor: pointer;"></canvas>
                 </div>
                 <button id="senderStreamBtn" class="btn btn-primary btn-lg" onclick="toggleSenderStream()">🚀 START OPTICAL BEAM</button>
             </div>
 
             <!-- Right: Settings & Telemetry -->
             <div class="card">
-                <span class="card-title">1. Transmission Presets (Grandma Mode)</span>
+                <span class="card-title">1. Transmission Presets</span>
                 <div class="preset-grid">
                     <div id="preset_potato" class="preset-card active" onclick="applyPreset('potato')">
                         <div class="preset-icon">🛡️</div>
-                        <div class="preset-name">Potato Camera</div>
-                        <div class="preset-sub">1-Bit B&W (Max Reliability)</div>
+                        <div class="preset-name">1-Bit B&W (Default)</div>
+                        <div class="preset-sub">~25 KB/s • Max Reliability</div>
                     </div>
                     <div id="preset_balanced" class="preset-card" onclick="applyPreset('balanced')">
-                        <div class="preset-icon">⚖️</div>
-                        <div class="preset-name">Balanced</div>
-                        <div class="preset-sub">4-Color (Recommended)</div>
+                        <div class="preset-icon">⚡</div>
+                        <div class="preset-name">4-Color Mode</div>
+                        <div class="preset-sub">~60 KB/s • 2x Faster ⚡</div>
                     </div>
                     <div id="preset_turbo" class="preset-card" onclick="applyPreset('turbo')">
-                        <div class="preset-icon">⚡</div>
-                        <div class="preset-name">Turbo Speed</div>
-                        <div class="preset-sub">8-Color RGB (550 KB/s)</div>
+                        <div class="preset-icon">🚀</div>
+                        <div class="preset-name">8-Color Turbo</div>
+                        <div class="preset-sub">~120+ KB/s • 3x Faster 🚀</div>
                     </div>
                 </div>
 
@@ -507,6 +522,11 @@ select, input[type="range"] {
                             <option value="32" selected>32x32 (Ultra Large Cells)</option>
                             <option value="48">48x48 (Balanced)</option>
                             <option value="64">64x64 (High Density)</option>
+                            <option value="128">128x128 (Ultra Density)</option>
+                            <option value="256">256x256 (Extreme Density)</option>
+                            <option value="512">512x512 (Max Density)</option>
+                            <option value="1024">1024x1024 (Experimental 1K)</option>
+                            <option value="2048">2048x2048 (Experimental 2K)</option>
                         </select>
                     </div>
 
@@ -11124,7 +11144,7 @@ const PALETTES = {
     ]
 };
 
-const JS_ANCHOR_SIZE = 5;
+const JS_ANCHOR_SIZE = 7;
 
 class JSColorMatrixLayout {
     constructor(gridSize = 48, colorMode = 2) {
@@ -11161,11 +11181,10 @@ class JSColorMatrixLayout {
                 const inTL = (r < s && c < s);
                 const inTR = (r < s && c >= N - s);
                 const inBL = (r >= N - s && c < s);
-                const inBR = (r >= N - s && c >= N - s);
                 const inTopBorder = (r === 0 && c >= s && c < N - s);
                 const inBotBorder = (r === N - 1 && c >= s && c < N - s);
 
-                if (!inTL && !inTR && !inBL && !inBR && !inTopBorder && !inBotBorder) {
+                if (!inTL && !inTR && !inBL && !inTopBorder && !inBotBorder) {
                     this.dataCoords.push({ r, c });
                 }
             }
@@ -11178,11 +11197,11 @@ class JSColorMatrixLayout {
 
     get anchorCenters() {
         const N = this.gridSize;
-        const c = 2.5 / N;
+        const c = 3.5 / N;
         return [
             { x: c, y: c },              // Top-Left
             { x: 1 - c, y: c },          // Top-Right
-            { x: 1 - c, y: 1 - c },      // Bottom-Right
+            { x: 1 - c, y: 1 - c },      // Bottom-Right (Extrapolated)
             { x: c, y: 1 - c }           // Bottom-Left
         ];
     }
@@ -11193,28 +11212,22 @@ class JSColorMatrixLayout {
         const white = this.palette.length - 1;
         const black = 0;
 
-        // 1:1:1:1:1 Concentric square anchors
-        // Standardized White center dots (1x1 at centroid) across all 4 corners for binarization invariance.
+        // 1:1:3:1:1 Standard QR Finder Patterns in 3 corners (TL, TR, BL)
 
-        // TL (Center dot at (2, 2))
-        for (let r = 0; r < s; r++) for (let c = 0; c < s; c++) grid2D[r][c] = white;
-        for (let r = 1; r < s - 1; r++) for (let c = 1; c < s - 1; c++) grid2D[r][c] = black;
-        grid2D[2][2] = white;
+        // TL
+        for (let r = 0; r < s; r++) for (let c = 0; c < s; c++) grid2D[r][c] = black;
+        for (let r = 1; r < s - 1; r++) for (let c = 1; c < s - 1; c++) grid2D[r][c] = white;
+        for (let r = 2; r < s - 2; r++) for (let c = 2; c < s - 2; c++) grid2D[r][c] = black;
 
-        // TR (Center dot at (2, N-3))
-        for (let r = 0; r < s; r++) for (let c = N - s; c < N; c++) grid2D[r][c] = white;
-        for (let r = 1; r < s - 1; r++) for (let c = N - s + 1; c < N - 1; c++) grid2D[r][c] = black;
-        grid2D[2][N - 3] = white;
+        // TR
+        for (let r = 0; r < s; r++) for (let c = N - s; c < N; c++) grid2D[r][c] = black;
+        for (let r = 1; r < s - 1; r++) for (let c = N - s + 1; c < N - 1; c++) grid2D[r][c] = white;
+        for (let r = 2; r < s - 2; r++) for (let c = N - s + 2; c < N - 2; c++) grid2D[r][c] = black;
 
-        // BR (Center dot at (N-3, N-3))
-        for (let r = N - s; r < N; r++) for (let c = N - s; c < N; c++) grid2D[r][c] = white;
-        for (let r = N - s + 1; r < N - 1; r++) for (let c = N - s + 1; c < N - 1; c++) grid2D[r][c] = black;
-        grid2D[N - 3][N - 3] = white;
-
-        // BL (Center dot at (N-3, 2))
-        for (let r = N - s; r < N; r++) for (let c = 0; c < s; c++) grid2D[r][c] = white;
-        for (let r = N - s + 1; r < N - 1; r++) for (let c = 1; c < s - 1; c++) grid2D[r][c] = black;
-        grid2D[N - 3][2] = white;
+        // BL
+        for (let r = N - s; r < N; r++) for (let c = 0; c < s; c++) grid2D[r][c] = black;
+        for (let r = N - s + 1; r < N - 1; r++) for (let c = 1; c < s - 1; c++) grid2D[r][c] = white;
+        for (let r = N - s + 2; r < N - 2; r++) for (let c = 2; c < s - 2; c++) grid2D[r][c] = black;
 
         // Calibration swatches
         let calIdxs = (this.colorMode === 2) ? [0, 4, 2, 1, 7] : ((this.colorMode === 1) ? [0, 1, 2, 3] : [0, 1, 0, 1]);
@@ -11688,7 +11701,7 @@ function find2DAnchorQuad(data, w, h) {
         }
     }
 
-    if (allCandidates.length < 4) return null;
+    if (allCandidates.length < 3) return null;
 
     // 4. Cluster Anchor Points
     const clusters = [];
@@ -11767,29 +11780,41 @@ function checkVerticalCrossSection(gray, w, h, cx, startY, T, expectedW) {
 }
 
 function orderQuadPointsClockwise(pts) {
-    const cx = (pts[0].x + pts[1].x + pts[2].x + pts[3].x) / 4;
-    const cy = (pts[0].y + pts[1].y + pts[2].y + pts[3].y) / 4;
+    // Determine which point is TL by finding the pair with the longest distance (TR and BL)
+    let d01 = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+    let d12 = Math.hypot(pts[1].x - pts[2].x, pts[1].y - pts[2].y);
+    let d02 = Math.hypot(pts[0].x - pts[2].x, pts[0].y - pts[2].y);
 
-    const sorted = pts.slice().sort((a, b) => {
-        return Math.atan2(a.y - cy, a.x - cx) - Math.atan2(b.y - cy, b.x - cx);
-    });
-
-    let tlIdx = 0, minSum = Infinity;
-    for (let i = 0; i < 4; i++) {
-        const s = sorted[i].x + sorted[i].y;
-        if (s < minSum) { minSum = s; tlIdx = i; }
+    let tl, a, b;
+    if (d01 >= d12 && d01 >= d02) {
+        tl = pts[2]; a = pts[0]; b = pts[1];
+    } else if (d12 >= d01 && d12 >= d02) {
+        tl = pts[0]; a = pts[1]; b = pts[2];
+    } else {
+        tl = pts[1]; a = pts[0]; b = pts[2];
     }
 
-    return [
-        sorted[tlIdx],
-        sorted[(tlIdx + 1) % 4],
-        sorted[(tlIdx + 2) % 4],
-        sorted[(tlIdx + 3) % 4]
-    ];
+    // Determine TR and BL using 2D cross product
+    // (A - TL) x (B - TL)
+    let cross = (a.x - tl.x) * (b.y - tl.y) - (a.y - tl.y) * (b.x - tl.x);
+    let tr, bl;
+    if (cross > 0) {
+        tr = a; bl = b;
+    } else {
+        tr = b; bl = a;
+    }
+
+    // Extrapolate BR
+    let br = {
+        x: tr.x + bl.x - tl.x,
+        y: tr.y + bl.y - tl.y
+    };
+
+    return [tl, tr, br, bl];
 }
 
 function findBestAnchorQuad(clusters, imgW, imgH) {
-    if (clusters.length < 4) return null;
+    if (clusters.length < 3) return null;
     const minQuadArea = (imgW * imgH) * 0.005; // At least 0.5% of camera frame
     const N = Math.min(clusters.length, 16);
     let bestQuad = null;
@@ -11798,57 +11823,54 @@ function findBestAnchorQuad(clusters, imgW, imgH) {
     for (let i = 0; i < N; i++) {
         for (let j = i + 1; j < N; j++) {
             for (let k = j + 1; k < N; k++) {
-                for (let l = k + 1; l < N; l++) {
-                    const combo = [
-                        { x: clusters[i].x, y: clusters[i].y, size: clusters[i].size },
-                        { x: clusters[j].x, y: clusters[j].y, size: clusters[j].size },
-                        { x: clusters[k].x, y: clusters[k].y, size: clusters[k].size },
-                        { x: clusters[l].x, y: clusters[l].y, size: clusters[l].size }
-                    ];
+                const combo = [
+                    { x: clusters[i].x, y: clusters[i].y, size: clusters[i].size },
+                    { x: clusters[j].x, y: clusters[j].y, size: clusters[j].size },
+                    { x: clusters[k].x, y: clusters[k].y, size: clusters[k].size }
+                ];
 
-                    const ordered = orderQuadPointsClockwise(combo);
+                const ordered = orderQuadPointsClockwise(combo);
 
-                    // 1. Calculate Quad Area (Shoelace formula)
-                    const area = 0.5 * Math.abs(
-                        (ordered[0].x * ordered[1].y - ordered[1].x * ordered[0].y) +
-                        (ordered[1].x * ordered[2].y - ordered[2].x * ordered[1].y) +
-                        (ordered[2].x * ordered[3].y - ordered[3].x * ordered[2].y) +
-                        (ordered[3].x * ordered[0].y - ordered[0].x * ordered[3].y)
-                    );
+                // 1. Calculate Quad Area (Shoelace formula)
+                const area = 0.5 * Math.abs(
+                    (ordered[0].x * ordered[1].y - ordered[1].x * ordered[0].y) +
+                    (ordered[1].x * ordered[2].y - ordered[2].x * ordered[1].y) +
+                    (ordered[2].x * ordered[3].y - ordered[3].x * ordered[2].y) +
+                    (ordered[3].x * ordered[0].y - ordered[0].x * ordered[3].y)
+                );
 
-                    if (area < minQuadArea) continue;
+                if (area < minQuadArea) continue;
 
-                    // 2. Check side lengths
-                    const d0 = Math.hypot(ordered[0].x - ordered[1].x, ordered[0].y - ordered[1].y);
-                    const d1 = Math.hypot(ordered[1].x - ordered[2].x, ordered[1].y - ordered[2].y);
-                    const d2 = Math.hypot(ordered[2].x - ordered[3].x, ordered[2].y - ordered[3].y);
-                    const d3 = Math.hypot(ordered[3].x - ordered[0].x, ordered[3].y - ordered[0].y);
+                // 2. Check side lengths
+                const d0 = Math.hypot(ordered[0].x - ordered[1].x, ordered[0].y - ordered[1].y);
+                const d1 = Math.hypot(ordered[1].x - ordered[2].x, ordered[1].y - ordered[2].y);
+                const d2 = Math.hypot(ordered[2].x - ordered[3].x, ordered[2].y - ordered[3].y);
+                const d3 = Math.hypot(ordered[3].x - ordered[0].x, ordered[3].y - ordered[0].y);
 
-                    const sides = [d0, d1, d2, d3];
-                    const sMin = Math.min(...sides);
-                    const sMax = Math.max(...sides);
-                    if (sMax === 0 || (sMin / sMax) < 0.25) continue;
+                const sides = [d0, d1, d2, d3];
+                const sMin = Math.min(...sides);
+                const sMax = Math.max(...sides);
+                if (sMax === 0 || (sMin / sMax) < 0.25) continue;
 
-                    // 3. Check diagonals
-                    const diag1 = Math.hypot(ordered[0].x - ordered[2].x, ordered[0].y - ordered[2].y);
-                    const diag2 = Math.hypot(ordered[1].x - ordered[3].x, ordered[1].y - ordered[3].y);
-                    const dMin = Math.min(diag1, diag2);
-                    const dMax = Math.max(diag1, diag2);
-                    if (dMax === 0 || (dMin / dMax) < 0.35) continue;
+                // 3. Check diagonals
+                const diag1 = Math.hypot(ordered[0].x - ordered[2].x, ordered[0].y - ordered[2].y);
+                const diag2 = Math.hypot(ordered[1].x - ordered[3].x, ordered[1].y - ordered[3].y);
+                const dMin = Math.min(diag1, diag2);
+                const dMax = Math.max(diag1, diag2);
+                if (dMax === 0 || (dMin / dMax) < 0.35) continue;
 
-                    // 4. Check anchor size uniformity
-                    const sizes = [combo[0].size, combo[1].size, combo[2].size, combo[3].size];
-                    const szMin = Math.min(...sizes);
-                    const szMax = Math.max(...sizes);
-                    if (szMax === 0 || (szMin / szMax) < 0.15) continue;
+                // 4. Check anchor size uniformity (only 3 anchors tested)
+                const sizes = [combo[0].size, combo[1].size, combo[2].size];
+                const szMin = Math.min(...sizes);
+                const szMax = Math.max(...sizes);
+                if (szMax === 0 || (szMin / szMax) < 0.15) continue;
 
-                    // 5. Score = Area * side_regularity * diag_regularity * sqrt(size_uniformity)
-                    const score = area * (sMin / sMax) * (dMin / dMax) * Math.sqrt(szMin / szMax);
+                // 5. Score = Area * side_regularity * diag_regularity * sqrt(size_uniformity)
+                const score = area * (sMin / sMax) * (dMin / dMax) * Math.sqrt(szMin / szMax);
 
-                    if (score > bestScore) {
-                        bestScore = score;
-                        bestQuad = ordered;
-                    }
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestQuad = ordered;
                 }
             }
         }
@@ -11920,8 +11942,15 @@ const CANDIDATE_CONFIGS = [
     { grid: 64, mode: 0, label: '64×64 B&W' },
     { grid: 32, mode: 1, label: '32×32 4-Color' },
     { grid: 48, mode: 1, label: '48×48 4-Color' },
+    { grid: 64, mode: 1, label: '64×64 4-Color' },
+    { grid: 128, mode: 1, label: '128×128 4-Color' },
     { grid: 48, mode: 2, label: '48×48 8-Color' },
     { grid: 64, mode: 2, label: '64×64 8-Color' },
+    { grid: 128, mode: 2, label: '128×128 8-Color' },
+    { grid: 256, mode: 2, label: '256×256 8-Color' },
+    { grid: 512, mode: 2, label: '512×512 8-Color' },
+    { grid: 1024, mode: 2, label: '1024×1024 8-Color' },
+    { grid: 2048, mode: 2, label: '2048×2048 8-Color' },
 ];
 
 let CACHED_LAYOUTS = {};
@@ -12137,9 +12166,18 @@ self.onmessage = function(e) {
             // PASS 2: Custom Multi-Color Optical Matrix Detection (3D Homography)
             // =========================================================================
             if (!decodedResult) {
-                const detectRes = detectOpticalQuad(imgData, width, height, guideRect);
-                quad = detectRes.quad;
-                detectMethod = detectRes.method;
+                let triedLock = false;
+                
+                // Tier 1: Steady Lock (Reuse last known quad)
+                if (workerLastLockedQuad) {
+                    quad = workerLastLockedQuad;
+                    detectMethod = "Color Matrix (Track Lock)";
+                    triedLock = true;
+                } else {
+                    const detectRes = detectOpticalQuad(imgData, width, height, guideRect);
+                    quad = detectRes.quad;
+                    detectMethod = detectRes.method;
+                }
 
                 if (quad) {
                     const configsToTest = workerLockedConfig ? [workerLockedConfig] : CANDIDATE_CONFIGS;
@@ -12163,12 +12201,45 @@ self.onmessage = function(e) {
                             decodedResult = res;
                             matchedConfigLabel = `${cfg.label} (${res.rotationDeg}° rot)`;
                             workerLockedConfig = cfg;
+                            workerLastLockedQuad = quad;
+                            workerLockStreak++;
                             break;
                         }
                     }
 
-                    if (!decodedResult && workerLockedConfig) {
-                        workerLockedConfig = null;
+                    if (!decodedResult) {
+                        // If we failed with lock, fall back to re-detecting
+                        if (triedLock) {
+                            workerLockStreak--;
+                            if (workerLockStreak <= 0) workerLastLockedQuad = null;
+                            
+                            const detectRes = detectOpticalQuad(imgData, width, height, guideRect);
+                            quad = detectRes.quad;
+                            detectMethod = detectRes.method;
+                            
+                            if (quad) {
+                                for (const cfg of configsToTest) {
+                                    const layoutKey = `${cfg.grid}_${cfg.mode}`;
+                                    const layout = CACHED_LAYOUTS[layoutKey];
+                                    if (!layout) continue;
+                                    
+                                    const sampleRes = sampleQuadGrid(imgData, width, height, quad, layout);
+                                    let res = decodeGridMultiOrientation(sampleRes.grid2D, layout);
+                                    if (res) {
+                                        decodedResult = res;
+                                        matchedConfigLabel = `${cfg.label} (${res.rotationDeg}° rot)`;
+                                        workerLockedConfig = cfg;
+                                        workerLastLockedQuad = quad;
+                                        workerLockStreak++;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        
+                        if (!decodedResult && workerLockedConfig) {
+                            workerLockedConfig = null;
+                        }
                     }
                 }
             }
@@ -12239,7 +12310,10 @@ self.onmessage = function(e) {
                 }, fileResult ? [fileResult.payloadBuffer] : []);
 
             } else {
-                if (quad) workerCRCErrors++;
+                if (quad) {
+                    workerCRCErrors++;
+                    if (verbose) log(`[F${frameNum}] ⚠️ CRC ERROR (Motion blur or poor lighting). Packet Dropped.`);
+                }
                 const progressRatio = workerDecoder ? workerDecoder.getProgress() : 0;
                 const progressPct = (progressRatio * 100).toFixed(4) + "%";
                 const allLogs = logLines.join('\n');
@@ -25068,7 +25142,7 @@ const PALETTES = {
     ]
 };
 
-const JS_ANCHOR_SIZE = 5;
+const JS_ANCHOR_SIZE = 7;
 
 class JSColorMatrixLayout {
     constructor(gridSize = 48, colorMode = 2) {
@@ -25105,11 +25179,10 @@ class JSColorMatrixLayout {
                 const inTL = (r < s && c < s);
                 const inTR = (r < s && c >= N - s);
                 const inBL = (r >= N - s && c < s);
-                const inBR = (r >= N - s && c >= N - s);
                 const inTopBorder = (r === 0 && c >= s && c < N - s);
                 const inBotBorder = (r === N - 1 && c >= s && c < N - s);
 
-                if (!inTL && !inTR && !inBL && !inBR && !inTopBorder && !inBotBorder) {
+                if (!inTL && !inTR && !inBL && !inTopBorder && !inBotBorder) {
                     this.dataCoords.push({ r, c });
                 }
             }
@@ -25122,11 +25195,11 @@ class JSColorMatrixLayout {
 
     get anchorCenters() {
         const N = this.gridSize;
-        const c = 2.5 / N;
+        const c = 3.5 / N;
         return [
             { x: c, y: c },              // Top-Left
             { x: 1 - c, y: c },          // Top-Right
-            { x: 1 - c, y: 1 - c },      // Bottom-Right
+            { x: 1 - c, y: 1 - c },      // Bottom-Right (Extrapolated)
             { x: c, y: 1 - c }           // Bottom-Left
         ];
     }
@@ -25137,28 +25210,22 @@ class JSColorMatrixLayout {
         const white = this.palette.length - 1;
         const black = 0;
 
-        // 1:1:1:1:1 Concentric square anchors
-        // Standardized White center dots (1x1 at centroid) across all 4 corners for binarization invariance.
+        // 1:1:3:1:1 Standard QR Finder Patterns in 3 corners (TL, TR, BL)
 
-        // TL (Center dot at (2, 2))
-        for (let r = 0; r < s; r++) for (let c = 0; c < s; c++) grid2D[r][c] = white;
-        for (let r = 1; r < s - 1; r++) for (let c = 1; c < s - 1; c++) grid2D[r][c] = black;
-        grid2D[2][2] = white;
+        // TL
+        for (let r = 0; r < s; r++) for (let c = 0; c < s; c++) grid2D[r][c] = black;
+        for (let r = 1; r < s - 1; r++) for (let c = 1; c < s - 1; c++) grid2D[r][c] = white;
+        for (let r = 2; r < s - 2; r++) for (let c = 2; c < s - 2; c++) grid2D[r][c] = black;
 
-        // TR (Center dot at (2, N-3))
-        for (let r = 0; r < s; r++) for (let c = N - s; c < N; c++) grid2D[r][c] = white;
-        for (let r = 1; r < s - 1; r++) for (let c = N - s + 1; c < N - 1; c++) grid2D[r][c] = black;
-        grid2D[2][N - 3] = white;
+        // TR
+        for (let r = 0; r < s; r++) for (let c = N - s; c < N; c++) grid2D[r][c] = black;
+        for (let r = 1; r < s - 1; r++) for (let c = N - s + 1; c < N - 1; c++) grid2D[r][c] = white;
+        for (let r = 2; r < s - 2; r++) for (let c = N - s + 2; c < N - 2; c++) grid2D[r][c] = black;
 
-        // BR (Center dot at (N-3, N-3))
-        for (let r = N - s; r < N; r++) for (let c = N - s; c < N; c++) grid2D[r][c] = white;
-        for (let r = N - s + 1; r < N - 1; r++) for (let c = N - s + 1; c < N - 1; c++) grid2D[r][c] = black;
-        grid2D[N - 3][N - 3] = white;
-
-        // BL (Center dot at (N-3, 2))
-        for (let r = N - s; r < N; r++) for (let c = 0; c < s; c++) grid2D[r][c] = white;
-        for (let r = N - s + 1; r < N - 1; r++) for (let c = 1; c < s - 1; c++) grid2D[r][c] = black;
-        grid2D[N - 3][2] = white;
+        // BL
+        for (let r = N - s; r < N; r++) for (let c = 0; c < s; c++) grid2D[r][c] = black;
+        for (let r = N - s + 1; r < N - 1; r++) for (let c = 1; c < s - 1; c++) grid2D[r][c] = white;
+        for (let r = N - s + 2; r < N - 2; r++) for (let c = 2; c < s - 2; c++) grid2D[r][c] = black;
 
         // Calibration swatches
         let calIdxs = (this.colorMode === 2) ? [0, 4, 2, 1, 7] : ((this.colorMode === 1) ? [0, 1, 2, 3] : [0, 1, 0, 1]);
@@ -25632,7 +25699,7 @@ function find2DAnchorQuad(data, w, h) {
         }
     }
 
-    if (allCandidates.length < 4) return null;
+    if (allCandidates.length < 3) return null;
 
     // 4. Cluster Anchor Points
     const clusters = [];
@@ -25711,29 +25778,41 @@ function checkVerticalCrossSection(gray, w, h, cx, startY, T, expectedW) {
 }
 
 function orderQuadPointsClockwise(pts) {
-    const cx = (pts[0].x + pts[1].x + pts[2].x + pts[3].x) / 4;
-    const cy = (pts[0].y + pts[1].y + pts[2].y + pts[3].y) / 4;
+    // Determine which point is TL by finding the pair with the longest distance (TR and BL)
+    let d01 = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+    let d12 = Math.hypot(pts[1].x - pts[2].x, pts[1].y - pts[2].y);
+    let d02 = Math.hypot(pts[0].x - pts[2].x, pts[0].y - pts[2].y);
 
-    const sorted = pts.slice().sort((a, b) => {
-        return Math.atan2(a.y - cy, a.x - cx) - Math.atan2(b.y - cy, b.x - cx);
-    });
-
-    let tlIdx = 0, minSum = Infinity;
-    for (let i = 0; i < 4; i++) {
-        const s = sorted[i].x + sorted[i].y;
-        if (s < minSum) { minSum = s; tlIdx = i; }
+    let tl, a, b;
+    if (d01 >= d12 && d01 >= d02) {
+        tl = pts[2]; a = pts[0]; b = pts[1];
+    } else if (d12 >= d01 && d12 >= d02) {
+        tl = pts[0]; a = pts[1]; b = pts[2];
+    } else {
+        tl = pts[1]; a = pts[0]; b = pts[2];
     }
 
-    return [
-        sorted[tlIdx],
-        sorted[(tlIdx + 1) % 4],
-        sorted[(tlIdx + 2) % 4],
-        sorted[(tlIdx + 3) % 4]
-    ];
+    // Determine TR and BL using 2D cross product
+    // (A - TL) x (B - TL)
+    let cross = (a.x - tl.x) * (b.y - tl.y) - (a.y - tl.y) * (b.x - tl.x);
+    let tr, bl;
+    if (cross > 0) {
+        tr = a; bl = b;
+    } else {
+        tr = b; bl = a;
+    }
+
+    // Extrapolate BR
+    let br = {
+        x: tr.x + bl.x - tl.x,
+        y: tr.y + bl.y - tl.y
+    };
+
+    return [tl, tr, br, bl];
 }
 
 function findBestAnchorQuad(clusters, imgW, imgH) {
-    if (clusters.length < 4) return null;
+    if (clusters.length < 3) return null;
     const minQuadArea = (imgW * imgH) * 0.005; // At least 0.5% of camera frame
     const N = Math.min(clusters.length, 16);
     let bestQuad = null;
@@ -25742,57 +25821,54 @@ function findBestAnchorQuad(clusters, imgW, imgH) {
     for (let i = 0; i < N; i++) {
         for (let j = i + 1; j < N; j++) {
             for (let k = j + 1; k < N; k++) {
-                for (let l = k + 1; l < N; l++) {
-                    const combo = [
-                        { x: clusters[i].x, y: clusters[i].y, size: clusters[i].size },
-                        { x: clusters[j].x, y: clusters[j].y, size: clusters[j].size },
-                        { x: clusters[k].x, y: clusters[k].y, size: clusters[k].size },
-                        { x: clusters[l].x, y: clusters[l].y, size: clusters[l].size }
-                    ];
+                const combo = [
+                    { x: clusters[i].x, y: clusters[i].y, size: clusters[i].size },
+                    { x: clusters[j].x, y: clusters[j].y, size: clusters[j].size },
+                    { x: clusters[k].x, y: clusters[k].y, size: clusters[k].size }
+                ];
 
-                    const ordered = orderQuadPointsClockwise(combo);
+                const ordered = orderQuadPointsClockwise(combo);
 
-                    // 1. Calculate Quad Area (Shoelace formula)
-                    const area = 0.5 * Math.abs(
-                        (ordered[0].x * ordered[1].y - ordered[1].x * ordered[0].y) +
-                        (ordered[1].x * ordered[2].y - ordered[2].x * ordered[1].y) +
-                        (ordered[2].x * ordered[3].y - ordered[3].x * ordered[2].y) +
-                        (ordered[3].x * ordered[0].y - ordered[0].x * ordered[3].y)
-                    );
+                // 1. Calculate Quad Area (Shoelace formula)
+                const area = 0.5 * Math.abs(
+                    (ordered[0].x * ordered[1].y - ordered[1].x * ordered[0].y) +
+                    (ordered[1].x * ordered[2].y - ordered[2].x * ordered[1].y) +
+                    (ordered[2].x * ordered[3].y - ordered[3].x * ordered[2].y) +
+                    (ordered[3].x * ordered[0].y - ordered[0].x * ordered[3].y)
+                );
 
-                    if (area < minQuadArea) continue;
+                if (area < minQuadArea) continue;
 
-                    // 2. Check side lengths
-                    const d0 = Math.hypot(ordered[0].x - ordered[1].x, ordered[0].y - ordered[1].y);
-                    const d1 = Math.hypot(ordered[1].x - ordered[2].x, ordered[1].y - ordered[2].y);
-                    const d2 = Math.hypot(ordered[2].x - ordered[3].x, ordered[2].y - ordered[3].y);
-                    const d3 = Math.hypot(ordered[3].x - ordered[0].x, ordered[3].y - ordered[0].y);
+                // 2. Check side lengths
+                const d0 = Math.hypot(ordered[0].x - ordered[1].x, ordered[0].y - ordered[1].y);
+                const d1 = Math.hypot(ordered[1].x - ordered[2].x, ordered[1].y - ordered[2].y);
+                const d2 = Math.hypot(ordered[2].x - ordered[3].x, ordered[2].y - ordered[3].y);
+                const d3 = Math.hypot(ordered[3].x - ordered[0].x, ordered[3].y - ordered[0].y);
 
-                    const sides = [d0, d1, d2, d3];
-                    const sMin = Math.min(...sides);
-                    const sMax = Math.max(...sides);
-                    if (sMax === 0 || (sMin / sMax) < 0.25) continue;
+                const sides = [d0, d1, d2, d3];
+                const sMin = Math.min(...sides);
+                const sMax = Math.max(...sides);
+                if (sMax === 0 || (sMin / sMax) < 0.25) continue;
 
-                    // 3. Check diagonals
-                    const diag1 = Math.hypot(ordered[0].x - ordered[2].x, ordered[0].y - ordered[2].y);
-                    const diag2 = Math.hypot(ordered[1].x - ordered[3].x, ordered[1].y - ordered[3].y);
-                    const dMin = Math.min(diag1, diag2);
-                    const dMax = Math.max(diag1, diag2);
-                    if (dMax === 0 || (dMin / dMax) < 0.35) continue;
+                // 3. Check diagonals
+                const diag1 = Math.hypot(ordered[0].x - ordered[2].x, ordered[0].y - ordered[2].y);
+                const diag2 = Math.hypot(ordered[1].x - ordered[3].x, ordered[1].y - ordered[3].y);
+                const dMin = Math.min(diag1, diag2);
+                const dMax = Math.max(diag1, diag2);
+                if (dMax === 0 || (dMin / dMax) < 0.35) continue;
 
-                    // 4. Check anchor size uniformity
-                    const sizes = [combo[0].size, combo[1].size, combo[2].size, combo[3].size];
-                    const szMin = Math.min(...sizes);
-                    const szMax = Math.max(...sizes);
-                    if (szMax === 0 || (szMin / szMax) < 0.15) continue;
+                // 4. Check anchor size uniformity (only 3 anchors tested)
+                const sizes = [combo[0].size, combo[1].size, combo[2].size];
+                const szMin = Math.min(...sizes);
+                const szMax = Math.max(...sizes);
+                if (szMax === 0 || (szMin / szMax) < 0.15) continue;
 
-                    // 5. Score = Area * side_regularity * diag_regularity * sqrt(size_uniformity)
-                    const score = area * (sMin / sMax) * (dMin / dMax) * Math.sqrt(szMin / szMax);
+                // 5. Score = Area * side_regularity * diag_regularity * sqrt(size_uniformity)
+                const score = area * (sMin / sMax) * (dMin / dMax) * Math.sqrt(szMin / szMax);
 
-                    if (score > bestScore) {
-                        bestScore = score;
-                        bestQuad = ordered;
-                    }
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestQuad = ordered;
                 }
             }
         }
@@ -25838,8 +25914,8 @@ if (typeof module !== 'undefined' && module.exports) {
  * ChromaBeam Web Sender Engine with Grandma Presets & Multi-Mode Support
  */
 
-let senderGridSize = 32;
-let senderColorMode = 0; // Default to Potato Mode (0: B&W) for instant bulletproof compatibility!
+let senderGridSize = 64; // Default 64x64
+let senderColorMode = 0; // Default 1-Bit B&W
 let senderLayout = new JSColorMatrixLayout(senderGridSize, senderColorMode);
 let senderEncoder = null;
 let senderFileBytes = null;
@@ -25856,22 +25932,70 @@ let senderLastFrameTime = 0;
 const senderCanvas = document.getElementById('senderCanvas');
 const senderCtx = senderCanvas ? senderCanvas.getContext('2d', { alpha: false }) : null;
 
+function saveSenderPreferences() {
+    try {
+        localStorage.setItem('chromabeam_grid', senderGridSize);
+        localStorage.setItem('chromabeam_mode', senderColorMode);
+        localStorage.setItem('chromabeam_fps', senderTargetFPS);
+    } catch (_) {}
+}
+
+function loadSenderPreferences() {
+    try {
+        const savedGrid = localStorage.getItem('chromabeam_grid');
+        const savedMode = localStorage.getItem('chromabeam_mode');
+        const savedFps = localStorage.getItem('chromabeam_fps');
+        if (savedGrid) senderGridSize = parseInt(savedGrid, 10);
+        if (savedMode) senderColorMode = parseInt(savedMode, 10);
+        if (savedFps) senderTargetFPS = parseInt(savedFps, 10);
+    } catch (_) {}
+}
+
 function initSender() {
     setupDragAndDrop();
     loadDemoSenderPayload();
-    applyPreset('potato'); // Start with Potato Mode for 100% immediate out-of-the-box reliability!
+    loadSenderPreferences();
+    syncSenderUIToState();
     renderIdleSenderFrame();
 }
 
-function applyPreset(presetName) {
+function syncSenderUIToState() {
     document.querySelectorAll('.preset-card').forEach(c => c.classList.remove('active'));
-    const card = document.getElementById(`preset_${presetName}`);
-    if (card) card.classList.add('active');
+    if (senderColorMode === 0 && senderGridSize === 64) {
+        const p = document.getElementById('preset_potato');
+        if (p) p.classList.add('active');
+    } else if (senderColorMode === 1 && senderGridSize === 48) {
+        const p = document.getElementById('preset_balanced');
+        if (p) p.classList.add('active');
+    } else if (senderColorMode === 2 && senderGridSize === 64) {
+        const p = document.getElementById('preset_turbo');
+        if (p) p.classList.add('active');
+    }
 
+    const gridSel = document.getElementById('senderGridSelect');
+    if (gridSel) gridSel.value = senderGridSize;
+    const modeSel = document.getElementById('senderModeSelect');
+    if (modeSel) modeSel.value = senderColorMode;
+    const fpsRng = document.getElementById('senderFpsRange');
+    if (fpsRng) {
+        fpsRng.value = senderTargetFPS;
+        const lbl = document.getElementById('senderFpsLabel');
+        if (lbl) lbl.textContent = `Frame Rate: ${senderTargetFPS} FPS`;
+    }
+
+    senderLayout = new JSColorMatrixLayout(senderGridSize, senderColorMode);
+    if (senderFileBytes) {
+        setSenderPayload(senderFileBytes, senderFilename);
+    } else {
+        renderIdleSenderFrame();
+    }
+}
+
+function applyPreset(presetName) {
     if (presetName === 'potato') {
-        // Potato Camera: 1-bit Monochrome B&W, 32x32, 15 FPS
+        // Default: 1-bit Monochrome B&W, 64x64, 15 FPS
         senderColorMode = 0;
-        senderGridSize = 32;
+        senderGridSize = 64;
         senderTargetFPS = 15;
     } else if (presetName === 'balanced') {
         // Balanced: 2-bit 4-Color, 48x48, 25 FPS
@@ -25885,23 +26009,8 @@ function applyPreset(presetName) {
         senderTargetFPS = 45;
     }
 
-    // Sync Pro Mode controls
-    const gridSel = document.getElementById('senderGridSelect');
-    if (gridSel) gridSel.value = senderGridSize;
-    const modeSel = document.getElementById('senderModeSelect');
-    if (modeSel) modeSel.value = senderColorMode;
-    const fpsRng = document.getElementById('senderFpsRange');
-    if (fpsRng) {
-        fpsRng.value = senderTargetFPS;
-        document.getElementById('senderFpsLabel').textContent = `Frame Rate: ${senderTargetFPS} FPS`;
-    }
-
-    senderLayout = new JSColorMatrixLayout(senderGridSize, senderColorMode);
-    if (senderFileBytes) {
-        setSenderPayload(senderFileBytes, senderFilename);
-    } else {
-        renderIdleSenderFrame();
-    }
+    saveSenderPreferences();
+    syncSenderUIToState();
 }
 
 function toggleProMode() {
@@ -26121,29 +26230,26 @@ function handleSelectedFile(file) {
 
 function updateSenderGridDensity(size) {
     senderGridSize = size;
-    senderLayout = new JSColorMatrixLayout(senderGridSize, senderColorMode);
-    if (senderFileBytes) setSenderPayload(senderFileBytes, senderFilename);
-    else renderIdleSenderFrame();
+    saveSenderPreferences();
+    syncSenderUIToState();
 }
 
 function updateSenderColorMode(mode) {
     senderColorMode = mode;
-    senderLayout = new JSColorMatrixLayout(senderGridSize, senderColorMode);
-    if (senderFileBytes) setSenderPayload(senderFileBytes, senderFilename);
-    else renderIdleSenderFrame();
+    saveSenderPreferences();
+    syncSenderUIToState();
 }
 
 function updateSenderFPS(fps) {
     senderTargetFPS = fps;
+    saveSenderPreferences();
     document.getElementById('senderFpsLabel').textContent = `Frame Rate: ${fps} FPS`;
 }
 
 function toggleSenderFullscreen() {
-    const container = document.getElementById('senderCanvasContainer');
-    if (!document.fullscreenElement) {
-        if (container.requestFullscreen) container.requestFullscreen();
-    } else {
-        if (document.exitFullscreen) document.exitFullscreen();
+    const canvas = document.getElementById('senderCanvas');
+    if (canvas) {
+        canvas.classList.toggle('fullscreen-canvas');
     }
 }
 

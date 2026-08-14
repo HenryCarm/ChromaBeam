@@ -11,7 +11,7 @@ const PALETTES = {
     ]
 };
 
-const JS_ANCHOR_SIZE = 5;
+const JS_ANCHOR_SIZE = 7;
 
 class JSColorMatrixLayout {
     constructor(gridSize = 48, colorMode = 2) {
@@ -48,11 +48,10 @@ class JSColorMatrixLayout {
                 const inTL = (r < s && c < s);
                 const inTR = (r < s && c >= N - s);
                 const inBL = (r >= N - s && c < s);
-                const inBR = (r >= N - s && c >= N - s);
                 const inTopBorder = (r === 0 && c >= s && c < N - s);
                 const inBotBorder = (r === N - 1 && c >= s && c < N - s);
 
-                if (!inTL && !inTR && !inBL && !inBR && !inTopBorder && !inBotBorder) {
+                if (!inTL && !inTR && !inBL && !inTopBorder && !inBotBorder) {
                     this.dataCoords.push({ r, c });
                 }
             }
@@ -65,11 +64,11 @@ class JSColorMatrixLayout {
 
     get anchorCenters() {
         const N = this.gridSize;
-        const c = 2.5 / N;
+        const c = 3.5 / N;
         return [
             { x: c, y: c },              // Top-Left
             { x: 1 - c, y: c },          // Top-Right
-            { x: 1 - c, y: 1 - c },      // Bottom-Right
+            { x: 1 - c, y: 1 - c },      // Bottom-Right (Extrapolated)
             { x: c, y: 1 - c }           // Bottom-Left
         ];
     }
@@ -80,28 +79,22 @@ class JSColorMatrixLayout {
         const white = this.palette.length - 1;
         const black = 0;
 
-        // 1:1:1:1:1 Concentric square anchors
-        // Standardized White center dots (1x1 at centroid) across all 4 corners for binarization invariance.
+        // 1:1:3:1:1 Standard QR Finder Patterns in 3 corners (TL, TR, BL)
 
-        // TL (Center dot at (2, 2))
-        for (let r = 0; r < s; r++) for (let c = 0; c < s; c++) grid2D[r][c] = white;
-        for (let r = 1; r < s - 1; r++) for (let c = 1; c < s - 1; c++) grid2D[r][c] = black;
-        grid2D[2][2] = white;
+        // TL
+        for (let r = 0; r < s; r++) for (let c = 0; c < s; c++) grid2D[r][c] = black;
+        for (let r = 1; r < s - 1; r++) for (let c = 1; c < s - 1; c++) grid2D[r][c] = white;
+        for (let r = 2; r < s - 2; r++) for (let c = 2; c < s - 2; c++) grid2D[r][c] = black;
 
-        // TR (Center dot at (2, N-3))
-        for (let r = 0; r < s; r++) for (let c = N - s; c < N; c++) grid2D[r][c] = white;
-        for (let r = 1; r < s - 1; r++) for (let c = N - s + 1; c < N - 1; c++) grid2D[r][c] = black;
-        grid2D[2][N - 3] = white;
+        // TR
+        for (let r = 0; r < s; r++) for (let c = N - s; c < N; c++) grid2D[r][c] = black;
+        for (let r = 1; r < s - 1; r++) for (let c = N - s + 1; c < N - 1; c++) grid2D[r][c] = white;
+        for (let r = 2; r < s - 2; r++) for (let c = N - s + 2; c < N - 2; c++) grid2D[r][c] = black;
 
-        // BR (Center dot at (N-3, N-3))
-        for (let r = N - s; r < N; r++) for (let c = N - s; c < N; c++) grid2D[r][c] = white;
-        for (let r = N - s + 1; r < N - 1; r++) for (let c = N - s + 1; c < N - 1; c++) grid2D[r][c] = black;
-        grid2D[N - 3][N - 3] = white;
-
-        // BL (Center dot at (N-3, 2))
-        for (let r = N - s; r < N; r++) for (let c = 0; c < s; c++) grid2D[r][c] = white;
-        for (let r = N - s + 1; r < N - 1; r++) for (let c = 1; c < s - 1; c++) grid2D[r][c] = black;
-        grid2D[N - 3][2] = white;
+        // BL
+        for (let r = N - s; r < N; r++) for (let c = 0; c < s; c++) grid2D[r][c] = black;
+        for (let r = N - s + 1; r < N - 1; r++) for (let c = 1; c < s - 1; c++) grid2D[r][c] = white;
+        for (let r = N - s + 2; r < N - 2; r++) for (let c = 2; c < s - 2; c++) grid2D[r][c] = black;
 
         // Calibration swatches
         let calIdxs = (this.colorMode === 2) ? [0, 4, 2, 1, 7] : ((this.colorMode === 1) ? [0, 1, 2, 3] : [0, 1, 0, 1]);
