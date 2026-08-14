@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html>
+<head><title>ChromaBeam Loopback Debug</title></head>
+<body>
+<h2>ChromaBeam JS Pipeline Loopback Diagnostic</h2>
+<pre id="output" style="font-family: monospace; white-space: pre-wrap;"></pre>
+<script src="fountain.js"></script>
+<script src="protocol.js"></script>
+<script src="matrix.js"></script>
+<script>
+const log = (s) => { document.getElementById('output').textContent += s + '\n'; console.log(s); };
+
+function runDiag() {
+    log("=== ChromaBeam Loopback Diagnostic ===\n");
+
+    // Test all 3 modes
+    const modes = [
+        { name: "Potato B&W", gridSize: 32, colorMode: 0 },
+        { name: "Balanced 4-Color", gridSize: 48, colorMode: 1 },
+        { name: "Turbo 8-Color", gridSize: 64, colorMode: 2 },
+    ];
+
+    for (const m of modes) {
+        log(`--- Mode: ${m.name} (${m.gridSize}x${m.gridSize}, colorMode=${m.colorMode}) ---`);
+        const layout = new JSColorMatrixLayout(m.gridSize, m.colorMode);
+        log(`  numDataCells: ${layout.numDataCells}`);
+        log(`  bitsPerCell: ${layout.bitsPerCell}`);
+        log(`  maxPayloadBits: ${layout.maxPayloadBits}`);
+        log(`  maxPayloadBytes: ${layout.maxPayloadBytes}`);
+
+        const blockSize = Math.max(24, layout.maxPayloadBytes - 16);
+        log(`  blockSize for packets: ${blockSize}`);
+
+        // Create a small test payload
+        const testData = new Uint8Array(256);
+        for (let i = 0; i < 256; i++) testData[i] = (i * 37) & 0xFF;
+
+        const metaBytes = packFileMetadata("test.bin", testData.length);
+        const fullPayload = new Uint8Array(metaBytes.length + testData.length);
+        fullPayload.set(metaBytes, 0);
+        fullPayload.set(testData, metaBytes.length);
+
+        const encoder = new LTEncoder(fullPayload, blockSize);
+        log(`  K (blocks): ${encoder.K}`);
+
+        // Generate one droplet, pack it, render to grid, read back, unpack
+        const seed = 0;
+        const { degree, indices, payload } = encoder.generateDroplet(seed);
+        log(`  Droplet seed=0: degree=${degree}, indices=[${indices.join(',')}]`);
+
+        const packet = packPacket(42, encoder.K, blockSize, seed, payload);
+        log(`  Packed packet: ${packet.length} bytes`);
+        log(`  Packet header hex: ${Array.from(packet.subarray(0, 12)).map(b => b.toString(16).padStart(2,'0')).join(' ')}`);
+
+        // Check: does the packet fit into the grid?
+        const packetTotalSize = HEADER_SIZE + blockSize + 4; // header + payload + CRC32
+        log(`  Required packet bytes: ${packetTotalSize}`);
+        log(`  Available grid payload bytes: ${layout.maxPayloadBytes}`);
+        if (packetTotalSize > layout.maxPayloadBytes) {
+            log(`  ❌ FATAL: Packet (${packetTotalSize} B) EXCEEDS grid capacity (${layout.maxPayloadBytes} B)! Data will be TRUNCATED!`);
+        } else {
+            log(`  ✅ Packet fits in grid.`);
+        }
+
+        // Render to grid indices
+        const grid2D = bytesToGridIndices(packet, layout);
+
+        // Read back from grid indices
+        const recoveredBytes = gridIndicesToBytes(grid2D, layout);
+        log(`  Recovered bytes length: ${recoveredBytes.length}`);
+
+        // Try to unpack
+        const result = unpackPacket(recoveredBytes);
+        if (result) {
+            log(`  ✅ Loopback CRC PASSED! fileId=${result.header.fileId}, K=${result.header.totalBlocks}, blockSize=${result.header.blockSize}, seed=${result.header.seed}`);
+            // Verify payload matches
+            let payloadMatch = true;
+            for (let i = 0; i < blockSize; i++) {
+                if (result.payload[i] !== payload[i]) {
+                    payloadMatch = false;
+                    log(`  ❌ Payload mismatch at byte ${i}: expected ${payload[i]}, got ${result.payload[i]}`);
+                    break;
+                }
+            }
+            if (payloadMatch) log(`  ✅ Payload byte-for-byte match!`);
+        } else {
+            log(`  ❌ Loopback CRC FAILED! unpackPacket returned null.`);
+
+            // Debug: check magic bytes
+            const magic = (recoveredBytes[0] << 8) | recoveredBytes[1];
+            log(`  Debug: magic=0x${magic.toString(16)} (expected 0x4342)`);
+
+            // Check if bytes even match
+            let firstMismatch = -1;
+            for (let i = 0; i < Math.min(packet.length, recoveredBytes.length); i++) {
+                if (packet[i] !== recoveredBytes[i]) {
+                    firstMismatch = i;
+                    break;
+                }
+            }
+            if (firstMismatch >= 0) {
+                log(`  Debug: First byte mismatch at index ${firstMismatch}: sent=${packet[firstMismatch]}, recovered=${recoveredBytes[firstMismatch]}`);
+            } else {
+                log(`  Debug: All ${Math.min(packet.length, recoveredBytes.length)} bytes match! Problem might be in unpackPacket parsing.`);
+            }
+        }
+        log("");
+    }
+}
+
+runDiag();
+</script>
+</body>
+</html>

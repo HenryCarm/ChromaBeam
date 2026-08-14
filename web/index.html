@@ -75,7 +75,7 @@
                     <button id="proToggleBtn" class="btn btn-secondary" onclick="toggleProMode()" style="font-size: 12px; padding: 6px 14px;">⚙️ Advanced Settings (Pro)</button>
                 </div>
 
-                <div id="senderProSection" style="display: none; display: flex; flex-direction: column; gap: 12px; border-top: 1px solid var(--card-border); padding-top: 12px;">
+                <div id="senderProSection" style="display: none; flex-direction: column; gap: 12px; border-top: 1px solid var(--card-border); padding-top: 12px;">
                     <div class="control-row">
                         <label for="senderModeSelect" style="font-size: 13px;">Color Depth:</label>
                         <select id="senderModeSelect" onchange="updateSenderColorMode(parseInt(this.value))">
@@ -157,9 +157,10 @@
                 <div class="metric-box" style="margin-top: 10px;">
                     <div class="metric-label" style="margin-bottom: 6px;">How to Scan</div>
                     <ul style="font-size: 12px; color: var(--text-secondary); padding-left: 18px; line-height: 1.6;">
-                        <li>Fit the flashing matrix roughly inside the green target box.</li>
-                        <li>ChromaBeam will <b>auto-detect the density and color mode</b> automatically!</li>
-                        <li>When full file is assembled, it will automatically download!</li>
+                        <li><b>Fill the green bracket guide</b> with the flashing matrix on your screen.</li>
+                        <li>Hold steady — ChromaBeam <b>auto-detects grid size and color mode</b>!</li>
+                        <li>Once the progress bar hits 100%, the file downloads automatically!</li>
+                        <li>Tip: Use <b>🛡️ Potato Camera (B&W)</b> preset on the sender for best reliability.</li>
                     </ul>
                 </div>
             </div>

@@ -20,7 +20,12 @@ from .fountain import (
 )
 from .color_matrix import (
     ColorMatrixLayout,
-    COLOR_PALETTE,
+    PALETTE_1BIT,
+    PALETTE_2BIT,
+    PALETTE_3BIT,
+    MODE_1BIT_BW,
+    MODE_2BIT_4COLOR,
+    MODE_3BIT_8COLOR,
     bytes_to_color_grid,
     color_grid_to_bytes,
     upscale_grid_for_display

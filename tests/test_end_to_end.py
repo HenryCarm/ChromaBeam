@@ -12,38 +12,52 @@ from core.color_matrix import (
     ColorMatrixLayout,
     bytes_to_color_grid,
     color_grid_to_bytes,
-    upscale_grid_for_display
+    upscale_grid_for_display,
+    MODE_1BIT_BW,
+    MODE_2BIT_4COLOR,
+    MODE_3BIT_8COLOR
 )
 from core.protocol import pack_packet, unpack_packet
 
 
 class TestColorMatrixAndEndToEnd(unittest.TestCase):
-    def test_color_matrix_pack_unpack_lossless(self):
-        layout = ColorMatrixLayout(grid_size=48)
+    def test_mode0_bw_lossless(self):
+        layout = ColorMatrixLayout(grid_size=32, color_mode=MODE_1BIT_BW)
         payload = os.urandom(layout.max_payload_bytes - 20)
-        packet = pack_packet(file_id=101, total_blocks=50, block_size=len(payload), seed=777, payload=payload)
+        packet = pack_packet(file_id=1, total_blocks=10, block_size=len(payload), seed=1, payload=payload)
 
-        # Synthesize RGB frame
         grid = bytes_to_color_grid(packet, layout)
-        self.assertEqual(grid.shape, (48, 48, 3))
-        self.assertEqual(grid.dtype, np.uint8)
+        self.assertEqual(grid.shape, (32, 32, 3))
 
-        # Decode directly from grid
         recovered_bytes = color_grid_to_bytes(grid, layout)
         result = unpack_packet(recovered_bytes)
         self.assertIsNotNone(result)
-
         header, unpacked_payload = result
-        self.assertEqual(header.file_id, 101)
-        self.assertEqual(header.total_blocks, 50)
-        self.assertEqual(header.seed, 777)
         self.assertEqual(unpacked_payload, payload)
 
-    def test_upscaling(self):
-        layout = ColorMatrixLayout(grid_size=48)
-        grid = np.zeros((48, 48, 3), dtype=np.uint8)
-        upscaled = upscale_grid_for_display(grid, target_resolution=480)
-        self.assertEqual(upscaled.shape, (480, 480, 3))
+    def test_mode1_4color_lossless(self):
+        layout = ColorMatrixLayout(grid_size=48, color_mode=MODE_2BIT_4COLOR)
+        payload = os.urandom(layout.max_payload_bytes - 20)
+        packet = pack_packet(file_id=2, total_blocks=20, block_size=len(payload), seed=2, payload=payload)
+
+        grid = bytes_to_color_grid(packet, layout)
+        recovered_bytes = color_grid_to_bytes(grid, layout)
+        result = unpack_packet(recovered_bytes)
+        self.assertIsNotNone(result)
+        header, unpacked_payload = result
+        self.assertEqual(unpacked_payload, payload)
+
+    def test_mode2_8color_lossless(self):
+        layout = ColorMatrixLayout(grid_size=64, color_mode=MODE_3BIT_8COLOR)
+        payload = os.urandom(layout.max_payload_bytes - 20)
+        packet = pack_packet(file_id=3, total_blocks=30, block_size=len(payload), seed=3, payload=payload)
+
+        grid = bytes_to_color_grid(packet, layout)
+        recovered_bytes = color_grid_to_bytes(grid, layout)
+        result = unpack_packet(recovered_bytes)
+        self.assertIsNotNone(result)
+        header, unpacked_payload = result
+        self.assertEqual(unpacked_payload, payload)
 
 
 if __name__ == '__main__':

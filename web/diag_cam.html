@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html>
+<head><title>ChromaBeam Camera Simulation Diagnostic</title></head>
+<body style="background:#111;color:#eee;font-family:monospace;">
+<h2>ChromaBeam Camera Simulation Diagnostic</h2>
+<p>This simulates what happens when the camera sees the matrix and tries to decode it.</p>
+<canvas id="simCanvas" width="480" height="480" style="border:1px solid #555;"></canvas>
+<pre id="output" style="white-space:pre-wrap;"></pre>
+
+<script src="fountain.js"></script>
+<script src="protocol.js"></script>
+<script src="matrix.js"></script>
+<script>
+const log = (s) => { document.getElementById('output').textContent += s + '\n'; };
+const canvas = document.getElementById('simCanvas');
+const ctx = canvas.getContext('2d', { willReadFrequently: true });
+
+function runCameraSim() {
+    log("=== Camera Simulation Diagnostic ===\n");
+
+    const modes = [
+        { name: "Potato B&W", gridSize: 32, colorMode: 0 },
+        { name: "Balanced 4-Color", gridSize: 48, colorMode: 1 },
+        { name: "Turbo 8-Color", gridSize: 64, colorMode: 2 },
+    ];
+
+    for (const m of modes) {
+        log(`--- ${m.name} ---`);
+        const layout = new JSColorMatrixLayout(m.gridSize, m.colorMode);
+        const blockSize = Math.max(24, layout.maxPayloadBytes - 16);
+
+        // Create encoder with test data
+        const testData = new Uint8Array(256);
+        for (let i = 0; i < 256; i++) testData[i] = (i * 37) & 0xFF;
+        const metaBytes = packFileMetadata("test.bin", testData.length);
+        const fullPayload = new Uint8Array(metaBytes.length + testData.length);
+        fullPayload.set(metaBytes, 0);
+        fullPayload.set(testData, metaBytes.length);
+        const encoder = new LTEncoder(fullPayload, blockSize);
+
+        // Generate droplet and render to canvas
+        const { degree, indices, payload } = encoder.generateDroplet(0);
+        const packet = packPacket(42, encoder.K, blockSize, 0, payload);
+        const grid2D = bytesToGridIndices(packet, layout);
+
+        // Draw to canvas (simulating what the screen shows)
+        const N = layout.gridSize;
+        const cellSize = canvas.width / N;
+        ctx.fillStyle = '#000';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        for (let r = 0; r < N; r++) {
+            for (let c = 0; c < N; c++) {
+                const colorIdx = grid2D[r][c];
+                const [red, green, blue] = layout.palette[colorIdx] || [0, 0, 0];
+                ctx.fillStyle = `rgb(${red}, ${green}, ${blue})`;
+                ctx.fillRect(Math.floor(c * cellSize), Math.floor(r * cellSize), Math.ceil(cellSize), Math.ceil(cellSize));
+            }
+        }
+
+        // Now simulate the receiver: read back from canvas pixels
+        const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        
+        // Simulate what detectMatrixCorners returns (perfect alignment = entire canvas)
+        const quad = [
+            { x: 0, y: 0 },                              // TL
+            { x: canvas.width, y: 0 },                   // TR
+            { x: canvas.width, y: canvas.height },        // BR
+            { x: 0, y: canvas.height }                    // BL
+        ];
+
+        // Sample using the receiver's actual sampling function
+        const sampledGrid = sampleGridFromQuad_sim(imgData, canvas.width, canvas.height, quad, m.gridSize, m.colorMode, layout);
+        
+        // Convert back to bytes
+        const recoveredBytes = gridIndicesToBytes(sampledGrid, layout);
+        const result = unpackPacket(recoveredBytes);
+        
+        if (result) {
+            log(`  ✅ Camera sim CRC PASSED (perfect alignment)`);
+        } else {
+            log(`  ❌ Camera sim CRC FAILED even with PERFECT alignment!`);
+            
+            // Count mismatches between original grid and sampled grid
+            let mismatches = 0;
+            for (let r = 0; r < N; r++) {
+                for (let c = 0; c < N; c++) {
+                    if (grid2D[r][c] !== sampledGrid[r][c]) {
+                        mismatches++;
+                        if (mismatches <= 5) {
+                            log(`  Mismatch at [${r},${c}]: expected=${grid2D[r][c]}, got=${sampledGrid[r][c]}`);
+                        }
+                    }
+                }
+            }
+            log(`  Total cell mismatches: ${mismatches} / ${N*N}`);
+        }
+        
+        // Now test with slight misalignment (simulating real camera)
+        const margin = cellSize * 0.5; // half a cell off
+        const quadOff = [
+            { x: margin, y: margin },
+            { x: canvas.width - margin, y: margin },
+            { x: canvas.width - margin, y: canvas.height - margin },
+            { x: margin, y: canvas.height - margin }
+        ];
+        
+        const sampledGridOff = sampleGridFromQuad_sim(imgData, canvas.width, canvas.height, quadOff, m.gridSize, m.colorMode, layout);
+        const recoveredOff = gridIndicesToBytes(sampledGridOff, layout);
+        const resultOff = unpackPacket(recoveredOff);
+        
+        if (resultOff) {
+            log(`  ✅ Half-cell-offset sim CRC PASSED`);
+        } else {
+            let mismatches = 0;
+            for (let r = 0; r < N; r++) for (let c = 0; c < N; c++) if (grid2D[r][c] !== sampledGridOff[r][c]) mismatches++;
+            log(`  ❌ Half-cell-offset sim FAILED: ${mismatches} mismatched cells`);
+        }
+        
+        log("");
+    }
+}
+
+// Replica of the receiver's sampling function for diagnostic purposes
+function sampleGridFromQuad_sim(imgData, w, h, quad, gridSize, colorMode, layout) {
+    const [tl, tr, br, bl] = quad;
+    const grid2D = Array.from({ length: gridSize }, () => new Uint8Array(gridSize));
+    const data = imgData.data;
+
+    for (let r = 0; r < gridSize; r++) {
+        const v = (r + 0.5) / gridSize;
+        for (let c = 0; c < gridSize; c++) {
+            const u = (c + 0.5) / gridSize;
+
+            const topX = tl.x + u * (tr.x - tl.x);
+            const topY = tl.y + u * (tr.y - tl.y);
+            const botX = bl.x + u * (br.x - bl.x);
+            const botY = bl.y + u * (br.y - bl.y);
+
+            const px = Math.floor(topX + v * (botX - topX));
+            const py = Math.floor(topY + v * (botY - topY));
+
+            if (px >= 0 && px < w && py >= 0 && py < h) {
+                const idx = (py * w + px) * 4;
+                const cr = data[idx];
+                const cg = data[idx + 1];
+                const cb = data[idx + 2];
+
+                if (colorMode === 0) {
+                    const luma = 0.299 * cr + 0.587 * cg + 0.114 * cb;
+                    grid2D[r][c] = (luma > 128) ? 1 : 0;
+                } else {
+                    // Use ideal palette for nearest-neighbor (since we're simulating perfect render)
+                    const palette = layout.palette;
+                    let bestIdx = 0;
+                    let minDist = 1e9;
+                    for (let k = 0; k < palette.length; k++) {
+                        const [pr, pg, pb] = palette[k];
+                        const dist = (cr - pr) ** 2 + (cg - pg) ** 2 + (cb - pb) ** 2;
+                        if (dist < minDist) {
+                            minDist = dist;
+                            bestIdx = k;
+                        }
+                    }
+                    grid2D[r][c] = bestIdx;
+                }
+            }
+        }
+    }
+    return grid2D;
+}
+
+runCameraSim();
+</script>
+</body>
+</html>
