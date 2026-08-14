@@ -222,6 +222,28 @@ def color_grid_to_bytes(grid: np.ndarray, layout: ColorMatrixLayout, classifier_
     return np.packbits(byte_bits).tobytes()
 
 
+def packet_to_standard_qr_rgb(packet: bytes) -> np.ndarray:
+    """
+    Renders packet bytes as a standard QR code frame with 1:1:3:1:1 finder patterns
+    and built-in Reed-Solomon error correction for bulletproof optical scanning.
+    """
+    import base64
+    import qrcode
+    b64_str = base64.b64encode(packet).decode('ascii')
+    qr = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_L, border=2)
+    qr.add_data(b64_str)
+    qr.make(fit=True)
+    matrix = qr.get_matrix()
+    h = len(matrix)
+    w = len(matrix[0])
+    raw_grid = np.zeros((h, w, 3), dtype=np.uint8)
+    for r in range(h):
+        for c in range(w):
+            val = 0 if matrix[r][c] else 255
+            raw_grid[r, c] = [val, val, val]
+    return raw_grid
+
+
 def upscale_grid_for_display(grid: np.ndarray, target_resolution: int = 512) -> np.ndarray:
     scale = max(1, target_resolution // grid.shape[0])
     return np.repeat(np.repeat(grid, scale, axis=0), scale, axis=1)

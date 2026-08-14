@@ -23,7 +23,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 
 from core.protocol import pack_packet, pack_file_metadata
 from core.fountain import LTEncoder
-from core.color_matrix import ColorMatrixLayout, bytes_to_color_grid, upscale_grid_for_display
+from core.color_matrix import ColorMatrixLayout, bytes_to_color_grid, upscale_grid_for_display, packet_to_standard_qr_rgb
 
 
 class OpticalMatrixCanvas(QWidget):
@@ -359,7 +359,7 @@ class SenderWindow(QMainWindow):
         )
 
         # 3. Synthesize RGB optical grid
-        rgb_grid = bytes_to_color_grid(packet, self.layout_engine)
+        rgb_grid = packet_to_standard_qr_rgb(packet)
         self.canvas.update_frame(rgb_grid)
 
         # 4. Update live telemetry

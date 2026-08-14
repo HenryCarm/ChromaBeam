@@ -29,7 +29,7 @@ from core.protocol import pack_packet, unpack_packet, pack_file_metadata, unpack
 from core.fountain import LTEncoder, LTDecoder
 from core.color_matrix import (
     ColorMatrixLayout, bytes_to_color_grid, color_grid_to_bytes, upscale_grid_for_display,
-    MODE_1BIT_BW, MODE_2BIT_4COLOR, MODE_3BIT_8COLOR
+    packet_to_standard_qr_rgb, MODE_1BIT_BW, MODE_2BIT_4COLOR, MODE_3BIT_8COLOR
 )
 from desktop_receiver.tracker import OpticalTracker
 from desktop_receiver.color_classifier import AdaptiveColorClassifier
@@ -597,7 +597,10 @@ class UnifiedChromaBeamApp(QMainWindow):
             payload=block_payload
         )
 
-        rgb_grid = bytes_to_color_grid(packet, self.layout_engine)
+        if self.color_mode == MODE_1BIT_BW:
+            rgb_grid = packet_to_standard_qr_rgb(packet)
+        else:
+            rgb_grid = bytes_to_color_grid(packet, self.layout_engine)
         self.canvas.update_frame(rgb_grid)
 
         elapsed = max(0.001, time.time() - self.start_stream_time)
