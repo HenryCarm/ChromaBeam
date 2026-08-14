@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ChromaBeam — High-Speed Optical File Transfer Protocol</title>
+    <meta name="description" content="Ultra-fast optical file transfer through 3-bit RGB animated matrix fountain codes across air-gapped screens and cameras.">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <header>
+        <div class="brand">
+            <span class="brand-icon">⚡</span>
+            <div>
+                <h1 class="brand-title">ChromaBeam</h1>
+                <p class="brand-subtitle">High-Speed Optical File Transfer Protocol</p>
+            </div>
+        </div>
+        <nav class="nav-tabs" aria-label="Application Mode Tabs">
+            <button id="tabSenderBtn" class="tab-btn active" onclick="switchView('sender')">📡 Beam Sender</button>
+            <button id="tabReceiverBtn" class="tab-btn" onclick="switchView('receiver')">📸 Optical Receiver</button>
+        </nav>
+    </header>
+
+    <main>
+        <!-- ==================== SENDER VIEW ==================== -->
+        <section id="senderView" class="view-section active">
+            <!-- Left: Optical Canvas -->
+            <div class="card">
+                <div class="control-row">
+                    <span class="card-title">Transmission Matrix Canvas</span>
+                    <button class="btn btn-secondary" onclick="toggleSenderFullscreen()" style="padding: 4px 10px; font-size: 12px;">⛶ Fullscreen</button>
+                </div>
+                <div id="senderCanvasContainer" class="canvas-wrapper">
+                    <canvas id="senderCanvas" width="480" height="480"></canvas>
+                </div>
+                <button id="senderStreamBtn" class="btn btn-primary btn-lg" onclick="toggleSenderStream()">🚀 START OPTICAL BEAM</button>
+            </div>
+
+            <!-- Right: Settings & Telemetry -->
+            <div class="card">
+                <span class="card-title">Payload Configuration</span>
+                
+                <div id="senderDropArea" class="drop-zone" onclick="document.getElementById('senderFileInput').click()">
+                    <div class="drop-title">📁 Choose a file or drop here</div>
+                    <div class="drop-subtitle">Images, ZIPs, APKs, Audio, Documents</div>
+                    <input type="file" id="senderFileInput" style="display: none;">
+                </div>
+
+                <div class="metric-box">
+                    <div id="senderFileLabel" style="font-weight: 600; word-break: break-all;">File: chromabeam_sample_128kb.bin</div>
+                    <div id="senderSizeLabel" style="font-size: 12px; color: var(--text-secondary); margin-top: 4px;">Size: 128.0 KB | Blocks K: 163 (Block: 808 B)</div>
+                </div>
+
+                <span class="card-title">Matrix Parameters</span>
+                <div class="control-row">
+                    <label for="senderGridSelect" style="font-size: 13px;">Grid Density:</label>
+                    <select id="senderGridSelect" onchange="updateSenderGridDensity(parseInt(this.value))">
+                        <option value="32">32x32 (Ultra Safe - 180 KB/s)</option>
+                        <option value="48" selected>48x48 (Balanced - 350 KB/s)</option>
+                        <option value="64">64x64 (High Speed - 550 KB/s)</option>
+                    </select>
+                </div>
+
+                <div class="control-row">
+                    <span id="senderFpsLabel" style="font-size: 13px;">Frame Rate: 45 FPS</span>
+                    <input type="range" id="senderFpsRange" min="15" max="60" value="45" oninput="updateSenderFPS(parseInt(this.value))">
+                </div>
+
+                <span class="card-title">Live Telemetry</span>
+                <div class="telemetry-grid">
+                    <div class="metric-box">
+                        <div class="metric-label">Effective Throughput</div>
+                        <div id="senderRateVal" class="metric-value">0.0 KB/s</div>
+                    </div>
+                    <div class="metric-box">
+                        <div class="metric-label">Droplet Packets</div>
+                        <div id="senderDropletVal" class="metric-value" style="font-size: 14px; color: #58a6ff;">Droplets: 0</div>
+                    </div>
+                </div>
+                <div id="senderCycleVal" style="font-size: 12px; color: var(--text-secondary); font-family: var(--font-mono);">Stream Cycles: 0x | Degree: 1</div>
+            </div>
+        </section>
+
+        <!-- ==================== RECEIVER VIEW ==================== -->
+        <section id="receiverView" class="view-section">
+            <!-- Left: Camera Viewfinder -->
+            <div class="card">
+                <div class="control-row">
+                    <span class="card-title">Camera Optical Viewfinder</span>
+                    <span id="receiverStatusBadge" class="badge-idle">● IDLE</span>
+                </div>
+                <div class="canvas-wrapper">
+                    <video id="receiverVideo" playsinline muted autoplay style="opacity: 0;"></video>
+                    <canvas id="receiverCanvas" width="640" height="640"></canvas>
+                </div>
+                <div style="display: flex; gap: 10px;">
+                    <button id="receiverStartBtn" class="btn btn-success btn-lg" onclick="startReceiverCamera()">📸 START CAMERA RECEIVER</button>
+                    <button id="receiverStopBtn" class="btn btn-danger btn-lg" onclick="stopReceiverCamera()" style="display: none;">🛑 STOP CAMERA</button>
+                </div>
+            </div>
+
+            <!-- Right: Reception & Decoder Progress -->
+            <div class="card">
+                <span class="card-title">Fountain Solver Progress</span>
+
+                <div class="progress-container">
+                    <div id="receiverProgressBar" class="progress-fill"></div>
+                    <div id="receiverProgressLabel" class="progress-text">0%</div>
+                </div>
+
+                <span class="card-title">Reception Telemetry</span>
+                <div class="telemetry-grid">
+                    <div class="metric-box">
+                        <div class="metric-label">Camera Frame Rate</div>
+                        <div id="receiverFpsVal" class="metric-value">0 FPS</div>
+                    </div>
+                    <div class="metric-box">
+                        <div class="metric-label">Droplets Received</div>
+                        <div id="receiverDropletVal" class="metric-value" style="font-size: 14px; color: #58a6ff;">Caught: 0 (Drops: 0)</div>
+                    </div>
+                </div>
+
+                <div class="metric-box" style="margin-top: 10px;">
+                    <div class="metric-label" style="margin-bottom: 6px;">Instructions for Best Transfer</div>
+                    <ul style="font-size: 12px; color: var(--text-secondary); padding-left: 18px; line-height: 1.6;">
+                        <li>Aim camera directly at the sender's animated screen.</li>
+                        <li>Keep the 4 corner markers inside the viewfinder box.</li>
+                        <li>The solver will auto-reconstruct the full file losslessly and download it instantly!</li>
+                    </ul>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <!-- Scripts -->
+    <script src="fountain.js"></script>
+    <script src="protocol.js"></script>
+    <script src="matrix.js"></script>
+    <script src="sender.js"></script>
+    <script src="receiver.js"></script>
+    <script>
+        function switchView(viewName) {
+            const senderView = document.getElementById('senderView');
+            const receiverView = document.getElementById('receiverView');
+            const tabSenderBtn = document.getElementById('tabSenderBtn');
+            const tabReceiverBtn = document.getElementById('tabReceiverBtn');
+
+            if (viewName === 'sender') {
+                senderView.classList.add('active');
+                receiverView.classList.remove('active');
+                tabSenderBtn.classList.add('active');
+                tabReceiverBtn.classList.remove('active');
+                if (receiverRunning) stopReceiverCamera();
+            } else {
+                senderView.classList.remove('active');
+                receiverView.classList.add('active');
+                tabSenderBtn.classList.remove('active');
+                tabReceiverBtn.classList.add('active');
+                if (senderIsStreaming) toggleSenderStream();
+            }
+        }
+
+        // Initialize on load
+        window.addEventListener('DOMContentLoaded', () => {
+            initSender();
+            initReceiver();
+        });
+    </script>
+</body>
+</html>

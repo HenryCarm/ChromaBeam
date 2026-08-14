@@ -1,0 +1,1496 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ChromaBeam — High-Speed Optical File Transfer Protocol</title>
+    <meta name="description" content="Ultra-fast optical file transfer through 3-bit RGB animated matrix fountain codes across air-gapped screens and cameras.">
+    <style>
+/* ChromaBeam Web & Mobile Stylesheet */
+:root {
+    --bg-dark: #090d12;
+    --card-bg: #121820;
+    --card-border: #222b38;
+    --accent-blue: #388bfd;
+    --accent-blue-hover: #58a6ff;
+    --accent-green: #2ea043;
+    --accent-green-hover: #3fb950;
+    --accent-red: #da3633;
+    --accent-red-hover: #f85149;
+    --text-primary: #f0f6fc;
+    --text-secondary: #8b949e;
+    --font-stack: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+}
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    background-color: var(--bg-dark);
+    color: var(--text-primary);
+    font-family: var(--font-stack);
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+}
+
+/* Header & Tab Navigation */
+header {
+    background-color: var(--card-bg);
+    border-bottom: 1px solid var(--card-border);
+    padding: 12px 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 16px;
+}
+
+.brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.brand-icon {
+    font-size: 24px;
+}
+
+.brand-title {
+    font-size: 18px;
+    font-weight: 700;
+    letter-spacing: -0.5px;
+    color: var(--text-primary);
+}
+
+.brand-subtitle {
+    font-size: 11px;
+    color: var(--text-secondary);
+    font-weight: 500;
+}
+
+.nav-tabs {
+    display: flex;
+    background: #090d12;
+    border: 1px solid var(--card-border);
+    border-radius: 8px;
+    padding: 4px;
+    gap: 4px;
+}
+
+.tab-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+    padding: 8px 18px;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.tab-btn.active {
+    background: var(--card-bg);
+    color: var(--text-primary);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+
+/* Main Container */
+main {
+    flex: 1;
+    max-width: 1200px;
+    width: 100%;
+    margin: 0 auto;
+    padding: 24px 16px;
+}
+
+.view-section {
+    display: none;
+}
+
+.view-section.active {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 24px;
+}
+
+@media (max-width: 860px) {
+    .view-section.active {
+        grid-template-columns: 1fr;
+    }
+}
+
+/* Cards & Surfaces */
+.card {
+    background-color: var(--card-bg);
+    border: 1px solid var(--card-border);
+    border-radius: 12px;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.card-title {
+    font-size: 14px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--accent-blue-hover);
+}
+
+/* Display / Canvas Areas */
+.canvas-wrapper {
+    background: #000000;
+    border: 1px solid var(--card-border);
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    position: relative;
+    aspect-ratio: 1 / 1;
+    width: 100%;
+    max-width: 520px;
+    margin: 0 auto;
+}
+
+#senderCanvas {
+    width: 100%;
+    height: 100%;
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+}
+
+#receiverVideo, #receiverCanvas {
+    position: absolute;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+/* Form Controls & Buttons */
+.btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 10px 18px;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    border: 1px solid transparent;
+    transition: all 0.15s ease;
+}
+
+.btn-primary {
+    background-color: var(--accent-blue);
+    color: #ffffff;
+}
+
+.btn-primary:hover {
+    background-color: var(--accent-blue-hover);
+}
+
+.btn-success {
+    background-color: var(--accent-green);
+    color: #ffffff;
+}
+
+.btn-success:hover {
+    background-color: var(--accent-green-hover);
+}
+
+.btn-danger {
+    background-color: var(--accent-red);
+    color: #ffffff;
+}
+
+.btn-danger:hover {
+    background-color: var(--accent-red-hover);
+}
+
+.btn-secondary {
+    background-color: #21262d;
+    border-color: #363b42;
+    color: var(--text-primary);
+}
+
+.btn-secondary:hover {
+    background-color: #30363d;
+}
+
+.btn-lg {
+    padding: 14px 24px;
+    font-size: 15px;
+    width: 100%;
+}
+
+.btn.active {
+    background-color: var(--accent-red);
+}
+
+/* File Drop Zone */
+.drop-zone {
+    border: 2px dashed #30363d;
+    border-radius: 8px;
+    padding: 24px 16px;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color 0.2s ease;
+}
+
+.drop-zone.drag-active, .drop-zone:hover {
+    border-color: var(--accent-blue);
+    background: rgba(56, 139, 253, 0.05);
+}
+
+.drop-title {
+    font-weight: 600;
+    margin-bottom: 4px;
+}
+
+.drop-subtitle {
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+/* Control Rows */
+.control-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+select, input[type="range"] {
+    background: #090d12;
+    border: 1px solid var(--card-border);
+    color: var(--text-primary);
+    padding: 8px 12px;
+    border-radius: 6px;
+    outline: none;
+    font-size: 13px;
+}
+
+/* Metrics & Telemetry Grid */
+.telemetry-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+}
+
+.metric-box {
+    background: #090d12;
+    border: 1px solid var(--card-border);
+    border-radius: 8px;
+    padding: 10px 14px;
+}
+
+.metric-label {
+    font-size: 11px;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    font-weight: 600;
+}
+
+.metric-value {
+    font-family: var(--font-mono);
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--accent-green-hover);
+    margin-top: 2px;
+}
+
+/* Progress Bar */
+.progress-container {
+    background: #090d12;
+    border: 1px solid var(--card-border);
+    border-radius: 8px;
+    height: 24px;
+    overflow: hidden;
+    position: relative;
+}
+
+.progress-fill {
+    background: linear-gradient(90deg, #2ea043, #3fb950);
+    height: 100%;
+    width: 0%;
+    transition: width 0.1s linear;
+}
+
+.progress-text {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    font-weight: 700;
+    font-family: var(--font-mono);
+}
+
+/* Badges */
+.badge-idle {
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.badge-scanning {
+    color: #f0883e;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.badge-locked {
+    color: var(--accent-green-hover);
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.badge-complete {
+    color: #58a6ff;
+    font-size: 12px;
+    font-weight: 700;
+}
+
+</style>
+</head>
+<body>
+    <header>
+        <div class="brand">
+            <span class="brand-icon">⚡</span>
+            <div>
+                <h1 class="brand-title">ChromaBeam</h1>
+                <p class="brand-subtitle">High-Speed Optical File Transfer Protocol</p>
+            </div>
+        </div>
+        <nav class="nav-tabs" aria-label="Application Mode Tabs">
+            <button id="tabSenderBtn" class="tab-btn active" onclick="switchView('sender')">📡 Beam Sender</button>
+            <button id="tabReceiverBtn" class="tab-btn" onclick="switchView('receiver')">📸 Optical Receiver</button>
+        </nav>
+    </header>
+
+    <main>
+        <!-- ==================== SENDER VIEW ==================== -->
+        <section id="senderView" class="view-section active">
+            <!-- Left: Optical Canvas -->
+            <div class="card">
+                <div class="control-row">
+                    <span class="card-title">Transmission Matrix Canvas</span>
+                    <button class="btn btn-secondary" onclick="toggleSenderFullscreen()" style="padding: 4px 10px; font-size: 12px;">⛶ Fullscreen</button>
+                </div>
+                <div id="senderCanvasContainer" class="canvas-wrapper">
+                    <canvas id="senderCanvas" width="480" height="480"></canvas>
+                </div>
+                <button id="senderStreamBtn" class="btn btn-primary btn-lg" onclick="toggleSenderStream()">🚀 START OPTICAL BEAM</button>
+            </div>
+
+            <!-- Right: Settings & Telemetry -->
+            <div class="card">
+                <span class="card-title">Payload Configuration</span>
+                
+                <div id="senderDropArea" class="drop-zone" onclick="document.getElementById('senderFileInput').click()">
+                    <div class="drop-title">📁 Choose a file or drop here</div>
+                    <div class="drop-subtitle">Images, ZIPs, APKs, Audio, Documents</div>
+                    <input type="file" id="senderFileInput" style="display: none;">
+                </div>
+
+                <div class="metric-box">
+                    <div id="senderFileLabel" style="font-weight: 600; word-break: break-all;">File: chromabeam_sample_128kb.bin</div>
+                    <div id="senderSizeLabel" style="font-size: 12px; color: var(--text-secondary); margin-top: 4px;">Size: 128.0 KB | Blocks K: 163 (Block: 808 B)</div>
+                </div>
+
+                <span class="card-title">Matrix Parameters</span>
+                <div class="control-row">
+                    <label for="senderGridSelect" style="font-size: 13px;">Grid Density:</label>
+                    <select id="senderGridSelect" onchange="updateSenderGridDensity(parseInt(this.value))">
+                        <option value="32">32x32 (Ultra Safe - 180 KB/s)</option>
+                        <option value="48" selected>48x48 (Balanced - 350 KB/s)</option>
+                        <option value="64">64x64 (High Speed - 550 KB/s)</option>
+                    </select>
+                </div>
+
+                <div class="control-row">
+                    <span id="senderFpsLabel" style="font-size: 13px;">Frame Rate: 45 FPS</span>
+                    <input type="range" id="senderFpsRange" min="15" max="60" value="45" oninput="updateSenderFPS(parseInt(this.value))">
+                </div>
+
+                <span class="card-title">Live Telemetry</span>
+                <div class="telemetry-grid">
+                    <div class="metric-box">
+                        <div class="metric-label">Effective Throughput</div>
+                        <div id="senderRateVal" class="metric-value">0.0 KB/s</div>
+                    </div>
+                    <div class="metric-box">
+                        <div class="metric-label">Droplet Packets</div>
+                        <div id="senderDropletVal" class="metric-value" style="font-size: 14px; color: #58a6ff;">Droplets: 0</div>
+                    </div>
+                </div>
+                <div id="senderCycleVal" style="font-size: 12px; color: var(--text-secondary); font-family: var(--font-mono);">Stream Cycles: 0x | Degree: 1</div>
+            </div>
+        </section>
+
+        <!-- ==================== RECEIVER VIEW ==================== -->
+        <section id="receiverView" class="view-section">
+            <!-- Left: Camera Viewfinder -->
+            <div class="card">
+                <div class="control-row">
+                    <span class="card-title">Camera Optical Viewfinder</span>
+                    <span id="receiverStatusBadge" class="badge-idle">● IDLE</span>
+                </div>
+                <div class="canvas-wrapper">
+                    <video id="receiverVideo" playsinline muted autoplay style="opacity: 0;"></video>
+                    <canvas id="receiverCanvas" width="640" height="640"></canvas>
+                </div>
+                <div style="display: flex; gap: 10px;">
+                    <button id="receiverStartBtn" class="btn btn-success btn-lg" onclick="startReceiverCamera()">📸 START CAMERA RECEIVER</button>
+                    <button id="receiverStopBtn" class="btn btn-danger btn-lg" onclick="stopReceiverCamera()" style="display: none;">🛑 STOP CAMERA</button>
+                </div>
+            </div>
+
+            <!-- Right: Reception & Decoder Progress -->
+            <div class="card">
+                <span class="card-title">Fountain Solver Progress</span>
+
+                <div class="progress-container">
+                    <div id="receiverProgressBar" class="progress-fill"></div>
+                    <div id="receiverProgressLabel" class="progress-text">0%</div>
+                </div>
+
+                <span class="card-title">Reception Telemetry</span>
+                <div class="telemetry-grid">
+                    <div class="metric-box">
+                        <div class="metric-label">Camera Frame Rate</div>
+                        <div id="receiverFpsVal" class="metric-value">0 FPS</div>
+                    </div>
+                    <div class="metric-box">
+                        <div class="metric-label">Droplets Received</div>
+                        <div id="receiverDropletVal" class="metric-value" style="font-size: 14px; color: #58a6ff;">Caught: 0 (Drops: 0)</div>
+                    </div>
+                </div>
+
+                <div class="metric-box" style="margin-top: 10px;">
+                    <div class="metric-label" style="margin-bottom: 6px;">Instructions for Best Transfer</div>
+                    <ul style="font-size: 12px; color: var(--text-secondary); padding-left: 18px; line-height: 1.6;">
+                        <li>Aim camera directly at the sender's animated screen.</li>
+                        <li>Keep the 4 corner markers inside the viewfinder box.</li>
+                        <li>The solver will auto-reconstruct the full file losslessly and download it instantly!</li>
+                    </ul>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <!-- Scripts -->
+    
+    
+    
+    
+    
+    <script>
+        function switchView(viewName) {
+            const senderView = document.getElementById('senderView');
+            const receiverView = document.getElementById('receiverView');
+            const tabSenderBtn = document.getElementById('tabSenderBtn');
+            const tabReceiverBtn = document.getElementById('tabReceiverBtn');
+
+            if (viewName === 'sender') {
+                senderView.classList.add('active');
+                receiverView.classList.remove('active');
+                tabSenderBtn.classList.add('active');
+                tabReceiverBtn.classList.remove('active');
+                if (receiverRunning) stopReceiverCamera();
+            } else {
+                senderView.classList.remove('active');
+                receiverView.classList.add('active');
+                tabSenderBtn.classList.remove('active');
+                tabReceiverBtn.classList.add('active');
+                if (senderIsStreaming) toggleSenderStream();
+            }
+        }
+
+        // Initialize on load
+        window.addEventListener('DOMContentLoaded', () => {
+            initSender();
+            initReceiver();
+        });
+    </script>
+<script>
+
+/* --- fountain.js --- */
+/**
+ * ChromaBeam JavaScript Luby Transform (LT) Fountain Code Implementation
+ * Matches Python Mulberry32 PRNG, Robust Soliton distribution, and peeling/GF(2) solver.
+ */
+
+class Mulberry32 {
+    constructor(seed) {
+        this.state = seed >>> 0;
+    }
+
+    nextUint32() {
+        this.state = (this.state + 0x6D2B79F5) >>> 0;
+        let t = this.state;
+        t = Math.imul(t ^ (t >>> 15), t | 1) >>> 0;
+        t ^= (t + Math.imul(t ^ (t >>> 7), 61)) >>> 0;
+        return (t ^ (t >>> 14)) >>> 0;
+    }
+
+    nextFloat() {
+        return this.nextUint32() / 4294967296.0;
+    }
+
+    randInt(low, high) {
+        if (low >= high) return low;
+        return low + (this.nextUint32() % (high - low + 1));
+    }
+}
+
+function getRobustSolitonCDF(K, c = 0.1, delta = 0.05) {
+    if (K === 1) return [1.0];
+
+    const rho = new Float64Array(K + 1);
+    rho[1] = 1.0 / K;
+    for (let d = 2; d <= K; d++) {
+        rho[d] = 1.0 / (d * (d - 1));
+    }
+
+    const R = c * Math.log(K / delta) * Math.sqrt(K);
+    const tau = new Float64Array(K + 1);
+    const kOverR = R > 0 ? Math.round(K / R) : K;
+
+    for (let d = 1; d <= K; d++) {
+        if (d < kOverR) {
+            tau[d] = R / (d * K);
+        } else if (d === kOverR) {
+            tau[d] = (R * Math.log(R / delta)) / K;
+        } else {
+            tau[d] = 0.0;
+        }
+    }
+
+    const mu = new Float64Array(K + 1);
+    let total = 0.0;
+    for (let d = 1; d <= K; d++) {
+        mu[d] = rho[d] + tau[d];
+        total += mu[d];
+    }
+    if (total <= 0) total = 1.0;
+
+    const cdf = new Float64Array(K + 1);
+    let cum = 0.0;
+    for (let d = 1; d <= K; d++) {
+        cum += mu[d] / total;
+        cdf[d] = cum;
+    }
+    cdf[K] = 1.0;
+    return cdf;
+}
+
+function sampleDegree(prng, cdf, K) {
+    if (K <= 1) return 1;
+    const r = prng.nextFloat();
+    for (let d = 1; d <= K; d++) {
+        if (r <= cdf[d]) return d;
+    }
+    return K;
+}
+
+function getDropletIndices(seed, K) {
+    if (K <= 1) return { degree: 1, indices: [0] };
+    if (seed < K) return { degree: 1, indices: [seed] };
+
+    const prng = new Mulberry32(seed);
+    const cdf = getRobustSolitonCDF(K);
+    const degree = sampleDegree(prng, cdf, K);
+
+    const indicesSet = new Set();
+    while (indicesSet.size < degree) {
+        const idx = prng.randInt(0, K - 1);
+        indicesSet.add(idx);
+    }
+    return { degree, indices: Array.from(indicesSet).sort((a, b) => a - b) };
+}
+
+class LTEncoder {
+    constructor(uint8Data, blockSize = 256) {
+        this.rawData = uint8Data;
+        this.blockSize = blockSize;
+        this.totalSize = uint8Data.length;
+        this.K = Math.max(1, Math.ceil(this.totalSize / this.blockSize));
+
+        this.blocks = [];
+        for (let i = 0; i < this.K; i++) {
+            const chunk = new Uint8Array(this.blockSize);
+            const start = i * this.blockSize;
+            const end = Math.min(start + this.blockSize, this.totalSize);
+            chunk.set(this.rawData.subarray(start, end));
+            this.blocks.push(chunk);
+        }
+    }
+
+    generateDroplet(seed) {
+        const { degree, indices } = getDropletIndices(seed, this.K);
+        const payload = new Uint8Array(this.blockSize);
+        payload.set(this.blocks[indices[0]]);
+
+        for (let k = 1; k < indices.length; k++) {
+            const other = this.blocks[indices[k]];
+            for (let j = 0; j < this.blockSize; j++) {
+                payload[j] ^= other[j];
+            }
+        }
+        return { degree, indices, payload };
+    }
+}
+
+class LTDecoder {
+    constructor(K, blockSize, totalFilesize) {
+        this.K = K;
+        this.blockSize = blockSize;
+        this.totalFilesize = totalFilesize;
+        this.solvedBlocks = new Map(); // idx -> Uint8Array
+        this.basis = new Map();        // pivot -> { indices: Set, data: Uint8Array }
+        this.receivedCount = 0;
+        this.isComplete = false;
+    }
+
+    addDroplet(seed, payloadUint8) {
+        if (this.isComplete) return true;
+        if (payloadUint8.length !== this.blockSize) return false;
+
+        this.receivedCount++;
+        const { degree, indices } = getDropletIndices(seed, this.K);
+        let curIndices = new Set(indices);
+        let curData = new Uint8Array(payloadUint8);
+
+        // 1. Reduce with already solved singletons
+        for (const [solvedIdx, solvedData] of this.solvedBlocks) {
+            if (curIndices.has(solvedIdx)) {
+                curIndices.delete(solvedIdx);
+                for (let j = 0; j < this.blockSize; j++) curData[j] ^= solvedData[j];
+            }
+        }
+
+        if (curIndices.size === 0) return this._checkComplete();
+
+        // 2. Incremental GF(2) elimination into basis
+        while (curIndices.size > 0) {
+            let pivot = Math.min(...curIndices);
+            if (this.basis.has(pivot)) {
+                const basisRow = this.basis.get(pivot);
+                // Symmetric difference
+                const newIndices = new Set();
+                for (const elem of curIndices) if (!basisRow.indices.has(elem)) newIndices.add(elem);
+                for (const elem of basisRow.indices) if (!curIndices.has(elem)) newIndices.add(elem);
+                curIndices = newIndices;
+
+                for (let j = 0; j < this.blockSize; j++) curData[j] ^= basisRow.data[j];
+            } else {
+                this.basis.set(pivot, { indices: curIndices, data: curData });
+                break;
+            }
+        }
+
+        // 3. Back-substitute and extract newly solved singletons
+        this._reduceBasis();
+        return this._checkComplete();
+    }
+
+    _reduceBasis() {
+        let changed = true;
+        while (changed) {
+            changed = false;
+            for (const [pivot, row] of Array.from(this.basis.entries())) {
+                for (const solvedIdx of Array.from(row.indices)) {
+                    if (this.solvedBlocks.has(solvedIdx)) {
+                        row.indices.delete(solvedIdx);
+                        const solvedData = this.solvedBlocks.get(solvedIdx);
+                        for (let j = 0; j < this.blockSize; j++) row.data[j] ^= solvedData[j];
+                        changed = true;
+                    }
+                }
+
+                if (row.indices.size === 0) {
+                    this.basis.delete(pivot);
+                } else if (row.indices.size === 1) {
+                    const singleIdx = row.indices.values().next().value;
+                    if (!this.solvedBlocks.has(singleIdx)) {
+                        this.solvedBlocks.set(singleIdx, new Uint8Array(row.data));
+                        this.basis.delete(pivot);
+                        changed = true;
+                    }
+                }
+            }
+        }
+    }
+
+    _checkComplete() {
+        if (this.solvedBlocks.size >= this.K) {
+            this.isComplete = true;
+            return true;
+        }
+        return false;
+    }
+
+    getProgress() {
+        return this.solvedBlocks.size / this.K;
+    }
+
+    reconstructData() {
+        if (this.solvedBlocks.size < this.K) return null;
+        const out = new Uint8Array(this.K * this.blockSize);
+        for (let i = 0; i < this.K; i++) {
+            if (!this.solvedBlocks.has(i)) return null;
+            out.set(this.solvedBlocks.get(i), i * this.blockSize);
+        }
+        return out.subarray(0, this.totalFilesize);
+    }
+}
+
+
+/* --- protocol.js --- */
+/**
+ * ChromaBeam JavaScript Protocol Serializer & CRC32
+ */
+
+const MAGIC_INT = 0x4342; // 'CB'
+const HEADER_SIZE = 12;
+
+// Standard CRC32 table
+const CRC_TABLE = new Uint32Array(256);
+for (let i = 0; i < 256; i++) {
+    let c = i;
+    for (let k = 0; k < 8; k++) {
+        c = ((c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1));
+    }
+    CRC_TABLE[i] = c >>> 0;
+}
+
+function computeCRC32(uint8Array) {
+    let crc = 0xFFFFFFFF;
+    for (let i = 0; i < uint8Array.length; i++) {
+        crc = (crc >>> 8) ^ CRC_TABLE[(crc ^ uint8Array[i]) & 0xFF];
+    }
+    return (crc ^ 0xFFFFFFFF) >>> 0;
+}
+
+function packPacket(fileId, totalBlocks, blockSize, seed, payloadUint8) {
+    const packet = new Uint8Array(HEADER_SIZE + blockSize + 4);
+    const view = new DataView(packet.buffer);
+
+    view.setUint16(0, MAGIC_INT, false);
+    view.setUint16(2, fileId & 0xFFFF, false);
+    view.setUint16(4, totalBlocks & 0xFFFF, false);
+    view.setUint16(6, blockSize & 0xFFFF, false);
+    view.setUint32(8, seed >>> 0, false);
+
+    packet.set(payloadUint8, HEADER_SIZE);
+
+    const crc = computeCRC32(payloadUint8);
+    view.setUint32(HEADER_SIZE + blockSize, crc, false);
+
+    return packet;
+}
+
+function unpackPacket(rawUint8) {
+    if (rawUint8.length < HEADER_SIZE + 4) return null;
+    const view = new DataView(rawUint8.buffer, rawUint8.byteOffset, rawUint8.byteLength);
+
+    const magic = view.getUint16(0, false);
+    if (magic !== MAGIC_INT) return null;
+
+    const fileId = view.getUint16(2, false);
+    const totalBlocks = view.getUint16(4, false);
+    const blockSize = view.getUint16(6, false);
+    const seed = view.getUint32(8, false);
+
+    if (rawUint8.length < HEADER_SIZE + blockSize + 4) return null;
+
+    const payload = rawUint8.subarray(HEADER_SIZE, HEADER_SIZE + blockSize);
+    const expectedCrc = view.getUint32(HEADER_SIZE + blockSize, false);
+
+    const actualCrc = computeCRC32(payload);
+    if (actualCrc !== expectedCrc) return null; // Corrupted frame
+
+    return {
+        header: { fileId, totalBlocks, blockSize, seed },
+        payload
+    };
+}
+
+function packFileMetadata(filename, filesize, mimeType = "application/octet-stream") {
+    const enc = new TextEncoder();
+    const nameBytes = enc.encode(filename).subarray(0, 255);
+    const mimeBytes = enc.encode(mimeType).subarray(0, 64);
+
+    const out = new Uint8Array(4 + 1 + nameBytes.length + 1 + mimeBytes.length);
+    const view = new DataView(out.buffer);
+
+    view.setUint32(0, filesize, false);
+    out[4] = nameBytes.length;
+    out.set(nameBytes, 5);
+    const offset = 5 + nameBytes.length;
+    out[offset] = mimeBytes.length;
+    out.set(mimeBytes, offset + 1);
+
+    return out;
+}
+
+function unpackFileMetadata(uint8Array) {
+    if (uint8Array.length < 6) return null;
+    const view = new DataView(uint8Array.buffer, uint8Array.byteOffset, uint8Array.byteLength);
+    const filesize = view.getUint32(0, false);
+    const nameLen = uint8Array[4];
+    if (uint8Array.length < 5 + nameLen + 1) return null;
+
+    const dec = new TextDecoder();
+    const filename = dec.decode(uint8Array.subarray(5, 5 + nameLen));
+    const offset = 5 + nameLen;
+    const mimeLen = uint8Array[offset];
+    if (uint8Array.length < offset + 1 + mimeLen) return null;
+
+    const mimeType = dec.decode(uint8Array.subarray(offset + 1, offset + 1 + mimeLen));
+    const metadataHeaderLen = offset + 1 + mimeLen;
+    return { filename, filesize, mimeType, metadataHeaderLen };
+}
+
+
+/* --- matrix.js --- */
+/**
+ * ChromaBeam JavaScript Optical Color Matrix Engine
+ */
+
+const JS_COLOR_PALETTE = [
+    [0,   0,   0],    // 000: Black
+    [0,   0,   255],  // 001: Blue
+    [0,   255, 0],    // 010: Green
+    [0,   255, 255],  // 011: Cyan
+    [255, 0,   0],    // 100: Red
+    [255, 0,   255],  // 101: Magenta
+    [255, 255, 0],    // 110: Yellow
+    [255, 255, 255]   // 111: White
+];
+
+const JS_ANCHOR_SIZE = 5;
+
+class JSColorMatrixLayout {
+    constructor(gridSize = 48) {
+        this.gridSize = gridSize;
+        this.anchorSize = JS_ANCHOR_SIZE;
+        this.dataCoords = [];
+        this.calCells = [];
+        this.timingCells = [];
+
+        const s = this.anchorSize;
+        const N = this.gridSize;
+
+        // 1. Calibration cells (Top row: s to s + 5)
+        const calEnd = Math.min(N - s, s + 5);
+        for (let c = s; c < calEnd; c++) {
+            this.calCells.push({ r: 0, c });
+        }
+
+        // 2. Timing tracks
+        // Top timing track (rest of top row)
+        for (let c = calEnd; c < N - s; c++) {
+            this.timingCells.push({ r: 0, c, colorIdx: (c % 2) * 7 });
+        }
+        // Bottom timing track
+        for (let c = s; c < N - s; c++) {
+            this.timingCells.push({ r: N - 1, c, colorIdx: (c % 2) * 7 });
+        }
+
+        // 3. Data cells
+        for (let r = 0; r < N; r++) {
+            for (let c = 0; c < N; c++) {
+                const inTL = (r < s && c < s);
+                const inTR = (r < s && c >= N - s);
+                const inBL = (r >= N - s && c < s);
+                const inBR = (r >= N - s && c >= N - s);
+                const inTopBorder = (r === 0 && c >= s && c < N - s);
+                const inBotBorder = (r === N - 1 && c >= s && c < N - s);
+
+                if (!inTL && !inTR && !inBL && !inBR && !inTopBorder && !inBotBorder) {
+                    this.dataCoords.push({ r, c });
+                }
+            }
+        }
+
+        this.numDataCells = this.dataCoords.length;
+        this.maxPayloadBits = this.numDataCells * 3;
+        this.maxPayloadBytes = Math.floor(this.maxPayloadBits / 8);
+    }
+
+    renderAnchors(grid2D) {
+        const s = this.anchorSize;
+        const N = this.gridSize;
+
+        // TL: Concentric
+        for (let r = 0; r < s; r++) for (let c = 0; c < s; c++) grid2D[r][c] = 7; // White
+        for (let r = 1; r < s - 1; r++) for (let c = 1; c < s - 1; c++) grid2D[r][c] = 0; // Black
+        for (let r = 2; r < s - 2; r++) for (let c = 2; c < s - 2; c++) grid2D[r][c] = 7; // Center dot
+
+        // TR: White box with inner notch
+        for (let r = 0; r < s; r++) for (let c = N - s; c < N; c++) grid2D[r][c] = 7;
+        for (let r = 1; r < s - 1; r++) for (let c = N - s + 1; c < N - 1; c++) grid2D[r][c] = 0;
+        grid2D[1][N - 2] = 7;
+
+        // BR: Concentric with Red target
+        for (let r = N - s; r < N; r++) for (let c = N - s; c < N; c++) grid2D[r][c] = 7;
+        for (let r = N - s + 1; r < N - 1; r++) for (let c = N - s + 1; c < N - 1; c++) grid2D[r][c] = 0;
+        for (let r = N - s + 2; r < N - 2; r++) for (let c = N - s + 2; c < N - 2; c++) grid2D[r][c] = 4; // Red center
+
+        // BL: Crosshair
+        for (let r = N - s; r < N; r++) for (let c = 0; c < s; c++) grid2D[r][c] = 7;
+        for (let r = N - s + 1; r < N - 1; r++) for (let c = 1; c < s - 1; c++) grid2D[r][c] = 0;
+        for (let r = N - s + 2; r < N - 2; r++) for (let c = 1; c < s - 1; c++) grid2D[r][c] = 7;
+        for (let r = N - s + 1; r < N - 1; r++) for (let c = 2; c < s - 2; c++) grid2D[r][c] = 7;
+
+        // Calibration Bar: K, R, G, B, W
+        const calColors = [0, 4, 2, 1, 7];
+        for (let i = 0; i < Math.min(this.calCells.length, calColors.length); i++) {
+            const { r, c } = this.calCells[i];
+            grid2D[r][c] = calColors[i];
+        }
+
+        // Timing Tracks
+        for (const { r, c, colorIdx } of this.timingCells) {
+            grid2D[r][c] = colorIdx;
+        }
+    }
+}
+
+function bytesToGridIndices(uint8Data, layout) {
+    const N = layout.gridSize;
+    const grid2D = Array.from({ length: N }, () => new Uint8Array(N));
+    layout.renderAnchors(grid2D);
+
+    // Unpack bits from bytes
+    const bits = [];
+    for (let i = 0; i < uint8Data.length; i++) {
+        const b = uint8Data[i];
+        for (let k = 7; k >= 0; k--) {
+            bits.push((b >> k) & 1);
+        }
+    }
+
+    // Pad to multiple of 3
+    while (bits.length % 3 !== 0) bits.push(0);
+
+    const numTriplets = Math.floor(bits.length / 3);
+    const numToDraw = Math.min(numTriplets, layout.numDataCells);
+
+    for (let i = 0; i < numToDraw; i++) {
+        const b0 = bits[i * 3];
+        const b1 = bits[i * 3 + 1];
+        const b2 = bits[i * 3 + 2];
+        const colorIdx = (b0 << 2) | (b1 << 1) | b2;
+        const { r, c } = layout.dataCoords[i];
+        grid2D[r][c] = colorIdx;
+    }
+
+    return grid2D;
+}
+
+function gridIndicesToBytes(grid2D, layout, rgbThreshold = 128) {
+    const bits = [];
+    for (let i = 0; i < layout.numDataCells; i++) {
+        const { r, c } = layout.dataCoords[i];
+        const colorIdx = grid2D[r][c];
+        // 3 bits
+        bits.push((colorIdx >> 2) & 1);
+        bits.push((colorIdx >> 1) & 1);
+        bits.push(colorIdx & 1);
+    }
+
+    const numBytes = Math.floor(bits.length / 8);
+    const out = new Uint8Array(numBytes);
+    for (let i = 0; i < numBytes; i++) {
+        let b = 0;
+        for (let k = 0; k < 8; k++) {
+            b = (b << 1) | bits[i * 8 + k];
+        }
+        out[i] = b;
+    }
+    return out;
+}
+
+
+/* --- sender.js --- */
+/**
+ * ChromaBeam Web Sender Engine
+ */
+
+let senderLayout = new JSColorMatrixLayout(48);
+let senderEncoder = null;
+let senderFileBytes = null;
+let senderFilename = "demo_sample.bin";
+let senderFileId = Math.floor(Math.random() * 50000) + 1000;
+let senderDropletSeed = 0;
+let senderTotalSent = 0;
+let senderStartTime = 0;
+let senderIsStreaming = false;
+let senderTargetFPS = 45;
+let senderAnimationHandle = null;
+let senderLastFrameTime = 0;
+
+const senderCanvas = document.getElementById('senderCanvas');
+const senderCtx = senderCanvas ? senderCanvas.getContext('2d', { alpha: false }) : null;
+
+function initSender() {
+    setupDragAndDrop();
+    loadDemoSenderPayload();
+    renderIdleSenderFrame();
+}
+
+function loadDemoSenderPayload() {
+    // Generate synthetic 128KB payload
+    const demoSize = 128 * 1024;
+    const buf = new Uint8Array(demoSize);
+    for (let i = 0; i < demoSize; i++) buf[i] = (i * 37) & 0xFF;
+    setSenderPayload(buf, "chromabeam_sample_128kb.bin");
+}
+
+function setSenderPayload(uint8Bytes, filename) {
+    senderFileBytes = uint8Bytes;
+    senderFilename = filename;
+    senderFileId = Math.floor(Math.random() * 50000) + 1000;
+
+    const metaBytes = packFileMetadata(senderFilename, senderFileBytes.length);
+    const fullPayload = new Uint8Array(metaBytes.length + senderFileBytes.length);
+    fullPayload.set(metaBytes, 0);
+    fullPayload.set(senderFileBytes, metaBytes.length);
+
+    const blockSize = Math.max(32, senderLayout.maxPayloadBytes - 16);
+    senderEncoder = new LTEncoder(fullPayload, blockSize);
+    senderDropletSeed = 0;
+    senderTotalSent = 0;
+
+    document.getElementById('senderFileLabel').textContent = `File: ${senderFilename}`;
+    document.getElementById('senderSizeLabel').textContent = `Size: ${(senderFileBytes.length / 1024).toFixed(1)} KB | Blocks K: ${senderEncoder.K} (Block: ${blockSize} B)`;
+}
+
+function renderIdleSenderFrame() {
+    if (!senderCtx) return;
+    const grid2D = Array.from({ length: senderLayout.gridSize }, () => new Uint8Array(senderLayout.gridSize));
+    senderLayout.renderAnchors(grid2D);
+    drawGridToCanvas(grid2D);
+}
+
+function drawGridToCanvas(grid2D) {
+    const N = senderLayout.gridSize;
+    const size = senderCanvas.width;
+    const cellSize = size / N;
+
+    senderCtx.fillStyle = '#000000';
+    senderCtx.fillRect(0, 0, size, size);
+
+    for (let r = 0; r < N; r++) {
+        for (let c = 0; c < N; c++) {
+            const colorIdx = grid2D[r][c];
+            const [red, green, blue] = JS_COLOR_PALETTE[colorIdx];
+            senderCtx.fillStyle = `rgb(${red}, ${green}, ${blue})`;
+            // Fill exact pixel cell (crisp integer bounds)
+            senderCtx.fillRect(Math.floor(c * cellSize), Math.floor(r * cellSize), Math.ceil(cellSize), Math.ceil(cellSize));
+        }
+    }
+}
+
+function toggleSenderStream() {
+    senderIsStreaming = !senderIsStreaming;
+    const btn = document.getElementById('senderStreamBtn');
+
+    if (senderIsStreaming) {
+        btn.textContent = "🛑 STOP OPTICAL BEAM";
+        btn.classList.add('active');
+        senderStartTime = performance.now();
+        senderTotalSent = 0;
+        senderLastFrameTime = performance.now();
+        animateSenderStream();
+    } else {
+        btn.textContent = "🚀 START OPTICAL BEAM";
+        btn.classList.remove('active');
+        if (senderAnimationHandle) cancelAnimationFrame(senderAnimationHandle);
+        document.getElementById('senderRateVal').textContent = "0.0 KB/s";
+    }
+}
+
+function animateSenderStream(currentTime) {
+    if (!senderIsStreaming) return;
+
+    const interval = 1000 / senderTargetFPS;
+    const delta = currentTime - senderLastFrameTime;
+
+    if (!currentTime || delta >= interval) {
+        senderLastFrameTime = currentTime ? (currentTime - (delta % interval)) : performance.now();
+
+        if (senderEncoder) {
+            const seed = senderDropletSeed++;
+            senderTotalSent++;
+
+            const { degree, indices, payload } = senderEncoder.generateDroplet(seed);
+            const packet = packPacket(senderFileId, senderEncoder.K, senderEncoder.blockSize, seed, payload);
+            const grid2D = bytesToGridIndices(packet, senderLayout);
+            drawGridToCanvas(grid2D);
+
+            // Update telemetry
+            const elapsed = Math.max(0.001, (performance.now() - senderStartTime) / 1000.0);
+            const kbSent = (senderTotalSent * packet.length) / 1024.0;
+            const rate = kbSent / elapsed;
+            const cycles = Math.floor(senderTotalSent / senderEncoder.K);
+
+            document.getElementById('senderRateVal').textContent = `${rate.toFixed(1)} KB/s`;
+            document.getElementById('senderDropletVal').textContent = `Droplets: ${senderTotalSent} (Seed #${seed})`;
+            document.getElementById('senderCycleVal').textContent = `Stream Cycles: ${cycles}x | Degree: ${degree}`;
+        }
+    }
+
+    senderAnimationHandle = requestAnimationFrame(animateSenderStream);
+}
+
+function setupDragAndDrop() {
+    const dropArea = document.getElementById('senderDropArea');
+    const fileInput = document.getElementById('senderFileInput');
+
+    if (!dropArea || !fileInput) return;
+
+    ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+        dropArea.addEventListener(eventName, e => {
+            e.preventDefault();
+            e.stopPropagation();
+        }, false);
+    });
+
+    ['dragenter', 'dragover'].forEach(eventName => {
+        dropArea.addEventListener(eventName, () => dropArea.classList.add('drag-active'), false);
+    });
+
+    ['dragleave', 'drop'].forEach(eventName => {
+        dropArea.addEventListener(eventName, () => dropArea.classList.remove('drag-active'), false);
+    });
+
+    dropArea.addEventListener('drop', e => {
+        const dt = e.dataTransfer;
+        const files = dt.files;
+        if (files.length > 0) handleSelectedFile(files[0]);
+    });
+
+    fileInput.addEventListener('change', e => {
+        if (e.target.files.length > 0) handleSelectedFile(e.target.files[0]);
+    });
+}
+
+function handleSelectedFile(file) {
+    const reader = new FileReader();
+    reader.onload = function(e) {
+        const uint8 = new Uint8Array(e.target.result);
+        setSenderPayload(uint8, file.name);
+    };
+    reader.readAsArrayBuffer(file);
+}
+
+function updateSenderGridDensity(size) {
+    senderLayout = new JSColorMatrixLayout(size);
+    if (senderFileBytes) {
+        setSenderPayload(senderFileBytes, senderFilename);
+    } else {
+        renderIdleSenderFrame();
+    }
+}
+
+function updateSenderFPS(fps) {
+    senderTargetFPS = fps;
+    document.getElementById('senderFpsLabel').textContent = `Frame Rate: ${fps} FPS`;
+}
+
+function toggleSenderFullscreen() {
+    const container = document.getElementById('senderCanvasContainer');
+    if (!document.fullscreenElement) {
+        if (container.requestFullscreen) container.requestFullscreen();
+    } else {
+        if (document.exitFullscreen) document.exitFullscreen();
+    }
+}
+
+
+/* --- receiver.js --- */
+/**
+ * ChromaBeam Web & Mobile Camera Optical Receiver
+ * Real-time video frame parsing, perspective correction, color classification, and LT fountain solver.
+ */
+
+let receiverLayout = new JSColorMatrixLayout(48);
+let receiverDecoder = null;
+let receiverCurrentFileId = null;
+let receiverVideo = null;
+let receiverCanvas = null;
+let receiverCtx = null;
+let receiverStream = null;
+let receiverRunning = false;
+
+let receiverPacketsCaught = 0;
+let receiverCRCErrors = 0;
+let receiverIsComplete = false;
+let receiverFpsCounter = 0;
+let receiverLastFpsTime = 0;
+let receiverCalculatedFPS = 0;
+
+function initReceiver() {
+    receiverVideo = document.getElementById('receiverVideo');
+    receiverCanvas = document.getElementById('receiverCanvas');
+    if (receiverCanvas) {
+        receiverCtx = receiverCanvas.getContext('2d', { willReadFrequently: true });
+    }
+}
+
+async function startReceiverCamera() {
+    try {
+        const constraints = {
+            video: {
+                facingMode: { ideal: "environment" },
+                width: { ideal: 1280 },
+                height: { ideal: 720 },
+                frameRate: { ideal: 60 }
+            },
+            audio: false
+        };
+
+        receiverStream = await navigator.mediaDevices.getUserMedia(constraints);
+        receiverVideo.srcObject = receiverStream;
+        await receiverVideo.play();
+
+        receiverRunning = true;
+        receiverPacketsCaught = 0;
+        receiverCRCErrors = 0;
+        receiverIsComplete = false;
+        receiverDecoder = null;
+
+        document.getElementById('receiverStartBtn').style.display = 'none';
+        document.getElementById('receiverStopBtn').style.display = 'inline-block';
+        document.getElementById('receiverStatusBadge').textContent = "● SCANNING FOR OPTICAL BEAM";
+        document.getElementById('receiverStatusBadge').className = "badge-scanning";
+
+        requestAnimationFrame(processReceiverFrame);
+    } catch (err) {
+        alert("Camera Access Error: " + err.message);
+        console.error("Camera error:", err);
+    }
+}
+
+function stopReceiverCamera() {
+    receiverRunning = false;
+    if (receiverStream) {
+        receiverStream.getTracks().forEach(track => track.stop());
+        receiverStream = null;
+    }
+    document.getElementById('receiverStartBtn').style.display = 'inline-block';
+    document.getElementById('receiverStopBtn').style.display = 'none';
+    document.getElementById('receiverStatusBadge').textContent = "● IDLE";
+    document.getElementById('receiverStatusBadge').className = "badge-idle";
+}
+
+function processReceiverFrame() {
+    if (!receiverRunning) return;
+
+    // Measure FPS
+    receiverFpsCounter++;
+    const now = performance.now();
+    if (now - receiverLastFpsTime >= 1000) {
+        receiverCalculatedFPS = receiverFpsCounter;
+        receiverFpsCounter = 0;
+        receiverLastFpsTime = now;
+        document.getElementById('receiverFpsVal').textContent = `${receiverCalculatedFPS} FPS`;
+    }
+
+    if (receiverVideo.readyState === receiverVideo.HAVE_ENOUGH_DATA) {
+        const vw = receiverVideo.videoWidth;
+        const vh = receiverVideo.videoHeight;
+
+        if (receiverCanvas.width !== vw || receiverCanvas.height !== vh) {
+            receiverCanvas.width = vw;
+            receiverCanvas.height = vh;
+        }
+
+        receiverCtx.drawImage(receiverVideo, 0, 0, vw, vh);
+        const imgData = receiverCtx.getImageData(0, 0, vw, vh);
+
+        // Track and extract optical matrix
+        const quad = detectOpticalQuad(imgData, vw, vh);
+
+        if (quad) {
+            drawLockReticle(quad);
+            document.getElementById('receiverStatusBadge').textContent = "● LOCKED ONTO BEAM";
+            document.getElementById('receiverStatusBadge').className = "badge-locked";
+
+            // Sample warped cells
+            const sampledGrid = sampleGridFromQuad(imgData, vw, vh, quad, receiverLayout.gridSize);
+            const rawBytes = gridIndicesToBytes(sampledGrid, receiverLayout);
+            const packet = unpackPacket(rawBytes);
+
+            if (packet) {
+                receiverPacketsCaught++;
+                const { header, payload } = packet;
+
+                if (!receiverDecoder || receiverCurrentFileId !== header.fileId) {
+                    receiverCurrentFileId = header.fileId;
+                    receiverDecoder = new LTDecoder(header.totalBlocks, header.blockSize, header.totalBlocks * header.blockSize);
+                    receiverIsComplete = false;
+                }
+
+                const solved = receiverDecoder.addDroplet(header.seed, payload);
+                const progress = receiverDecoder.getProgress();
+
+                // Update UI progress
+                updateReceiverProgress(progress);
+
+                if (solved && !receiverIsComplete) {
+                    receiverIsComplete = true;
+                    onFileTransferComplete();
+                }
+            } else {
+                receiverCRCErrors++;
+            }
+        } else {
+            document.getElementById('receiverStatusBadge').textContent = "● SCANNING FOR OPTICAL BEAM";
+            document.getElementById('receiverStatusBadge').className = "badge-scanning";
+        }
+
+        document.getElementById('receiverDropletVal').textContent = `Caught: ${receiverPacketsCaught} (Drops: ${receiverCRCErrors})`;
+    }
+
+    if (receiverRunning) {
+        requestAnimationFrame(processReceiverFrame);
+    }
+}
+
+/**
+ * Fast quad finder: uses center viewfinder region of interest for rapid homography sampling.
+ */
+function detectOpticalQuad(imgData, w, h) {
+    // High-contrast center ROI box
+    const marginX = w * 0.15;
+    const marginY = h * 0.15;
+    const size = Math.min(w - 2 * marginX, h - 2 * marginY);
+    const cx = w / 2;
+    const cy = h / 2;
+
+    const tl = { x: cx - size / 2, y: cy - size / 2 };
+    const tr = { x: cx + size / 2, y: cy - size / 2 };
+    const br = { x: cx + size / 2, y: cy + size / 2 };
+    const bl = { x: cx - size / 2, y: cy + size / 2 };
+
+    return [tl, tr, br, bl];
+}
+
+function sampleGridFromQuad(imgData, w, h, quad, gridSize) {
+    const [tl, tr, br, bl] = quad;
+    const grid2D = Array.from({ length: gridSize }, () => new Uint8Array(gridSize));
+    const data = imgData.data;
+
+    for (let r = 0; r < gridSize; r++) {
+        const v = (r + 0.5) / gridSize;
+        for (let c = 0; c < gridSize; c++) {
+            const u = (c + 0.5) / gridSize;
+
+            // Bilinear interpolation between quad vertices
+            const topX = tl.x + u * (tr.x - tl.x);
+            const topY = tl.y + u * (tr.y - tl.y);
+            const botX = bl.x + u * (br.x - bl.x);
+            const botY = bl.y + u * (br.y - bl.y);
+
+            const px = Math.floor(topX + v * (botX - topX));
+            const py = Math.floor(topY + v * (botY - topY));
+
+            if (px >= 0 && px < w && py >= 0 && py < h) {
+                const idx = (py * w + px) * 4;
+                const red = data[idx];
+                const green = data[idx + 1];
+                const blue = data[idx + 2];
+
+                // 3-bit threshold
+                const rBit = red > 128 ? 1 : 0;
+                const gBit = green > 128 ? 1 : 0;
+                const bBit = blue > 128 ? 1 : 0;
+                grid2D[r][c] = (rBit << 2) | (gBit << 1) | bBit;
+            }
+        }
+    }
+
+    return grid2D;
+}
+
+function drawLockReticle(quad) {
+    receiverCtx.strokeStyle = '#00ff66';
+    receiverCtx.lineWidth = 3;
+    receiverCtx.beginPath();
+    receiverCtx.moveTo(quad[0].x, quad[0].y);
+    receiverCtx.lineTo(quad[1].x, quad[1].y);
+    receiverCtx.lineTo(quad[2].x, quad[2].y);
+    receiverCtx.lineTo(quad[3].x, quad[3].y);
+    receiverCtx.closePath();
+    receiverCtx.stroke();
+
+    // Draw corner markers
+    quad.forEach(pt => {
+        receiverCtx.fillStyle = '#ff0033';
+        receiverCtx.beginPath();
+        receiverCtx.arc(pt.x, pt.y, 6, 0, 2 * Math.PI);
+        receiverCtx.fill();
+    });
+}
+
+function updateReceiverProgress(ratio) {
+    const pct = Math.min(100, Math.floor(ratio * 100));
+    document.getElementById('receiverProgressBar').style.width = `${pct}%`;
+    document.getElementById('receiverProgressLabel').textContent = `${pct}%`;
+}
+
+function onFileTransferComplete() {
+    updateReceiverProgress(1.0);
+    document.getElementById('receiverStatusBadge').textContent = "★ TRANSFER COMPLETE!";
+    document.getElementById('receiverStatusBadge').className = "badge-complete";
+
+    const fullData = receiverDecoder.reconstructData();
+    if (!fullData) return;
+
+    const meta = unpackFileMetadata(fullData);
+    let filename = "chromabeam_received.bin";
+    let filePayload = fullData;
+
+    if (meta) {
+        filename = meta.filename;
+        filePayload = fullData.subarray(meta.metadataHeaderLen, meta.metadataHeaderLen + meta.filesize);
+    }
+
+    // Trigger instant browser download
+    const blob = new Blob([filePayload], { type: 'application/octet-stream' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+
+    alert(`🎉 Success! Received and saved: ${filename} (${(filePayload.length / 1024).toFixed(1)} KB)`);
+}
+
+
+</script>
+</body>
+</html>
