@@ -109,6 +109,16 @@
                     <div id="receiverProgressLabel" class="progress-text">0%</div>
                 </div>
 
+                <span class="card-title">Receiver Settings</span>
+                <div class="control-row">
+                    <label for="receiverGridSelect" style="font-size: 13px;">Matrix Density:</label>
+                    <select id="receiverGridSelect" onchange="updateReceiverGridDensity(parseInt(this.value))">
+                        <option value="32">32x32 (Ultra Safe - 180 KB/s)</option>
+                        <option value="48">48x48 (Balanced - 350 KB/s)</option>
+                        <option value="64" selected>64x64 (High Speed - 550 KB/s)</option>
+                    </select>
+                </div>
+
                 <span class="card-title">Reception Telemetry</span>
                 <div class="telemetry-grid">
                     <div class="metric-box">

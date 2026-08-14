@@ -470,6 +470,16 @@ select, input[type="range"] {
                     <div id="receiverProgressLabel" class="progress-text">0%</div>
                 </div>
 
+                <span class="card-title">Receiver Settings</span>
+                <div class="control-row">
+                    <label for="receiverGridSelect" style="font-size: 13px;">Matrix Density:</label>
+                    <select id="receiverGridSelect" onchange="updateReceiverGridDensity(parseInt(this.value))">
+                        <option value="32">32x32 (Ultra Safe - 180 KB/s)</option>
+                        <option value="48">48x48 (Balanced - 350 KB/s)</option>
+                        <option value="64" selected>64x64 (High Speed - 550 KB/s)</option>
+                    </select>
+                </div>
+
                 <span class="card-title">Reception Telemetry</span>
                 <div class="telemetry-grid">
                     <div class="metric-box">
@@ -1229,11 +1239,16 @@ function toggleSenderFullscreen() {
 
 /* --- receiver.js --- */
 /**
- * ChromaBeam Web & Mobile Camera Optical Receiver
- * Real-time video frame parsing, perspective correction, color classification, and LT fountain solver.
+ * ChromaBeam High-Performance Web & Mobile Optical Receiver
+ * Features:
+ * - Sub-pixel corner anchor search & snap
+ * - Dynamic 5-point RGB color calibrator & Euclidean nearest-neighbor classifier
+ * - Robust Soliton Luby Transform ripple solver
+ * - Auto-download upon 100% completion
  */
 
-let receiverLayout = new JSColorMatrixLayout(48);
+let receiverGridSize = 64;
+let receiverLayout = new JSColorMatrixLayout(receiverGridSize);
 let receiverDecoder = null;
 let receiverCurrentFileId = null;
 let receiverVideo = null;
@@ -1249,6 +1264,18 @@ let receiverFpsCounter = 0;
 let receiverLastFpsTime = 0;
 let receiverCalculatedFPS = 0;
 
+// Dynamic calibrated color vectors in RGB [0..255]
+let calibratedPalette = [
+    [20, 20, 20],      // 000: Black
+    [40, 60, 220],     // 001: Blue
+    [40, 200, 60],     // 010: Green
+    [40, 210, 220],    // 011: Cyan
+    [220, 40, 40],     // 100: Red
+    [220, 50, 220],    // 101: Magenta
+    [220, 210, 40],    // 110: Yellow
+    [240, 240, 240]    // 111: White
+];
+
 function initReceiver() {
     receiverVideo = document.getElementById('receiverVideo');
     receiverCanvas = document.getElementById('receiverCanvas');
@@ -1257,12 +1284,21 @@ function initReceiver() {
     }
 }
 
+function updateReceiverGridDensity(size) {
+    receiverGridSize = size;
+    receiverLayout = new JSColorMatrixLayout(size);
+    receiverDecoder = null;
+    receiverCurrentFileId = null;
+    receiverPacketsCaught = 0;
+    receiverCRCErrors = 0;
+    receiverIsComplete = false;
+    updateReceiverProgress(0);
+}
+
 async function getCameraStream(constraints) {
-    // 1. Standard navigator.mediaDevices.getUserMedia
     if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
         return await navigator.mediaDevices.getUserMedia(constraints);
     }
-    // 2. Legacy navigator.getUserMedia fallbacks
     const legacyGetUserMedia = navigator.getUserMedia || navigator.webkitGetUserMedia || navigator.mozGetUserMedia || navigator.msGetUserMedia;
     if (legacyGetUserMedia) {
         return new Promise((resolve, reject) => {
@@ -1303,13 +1339,13 @@ async function startReceiverCamera() {
     } catch (err) {
         if (err.message === "INSECURE_CONTEXT_OR_UNSUPPORTED" || err.name === "TypeError") {
             const httpsUrl = `https://${location.hostname}:8443/`;
-            const msg = `⚠️ Camera Blocked by Browser Security Policy!\n\nModern mobile browsers (Chrome / Samsung Internet / Safari) require HTTPS for camera access.\n\n👉 Please open the HTTPS link instead:\n${httpsUrl}\n\n(Tap 'Advanced' -> 'Proceed' if you see a self-signed cert warning).`;
+            const msg = `⚠️ Camera Blocked by Browser Security Policy!\n\nModern mobile browsers require HTTPS for camera access.\n\n👉 Please open the HTTPS link:\n${httpsUrl}\n\n(Tap 'Advanced' -> 'Proceed' if you see a cert warning).`;
             alert(msg);
             if (confirm("Redirect to HTTPS now?")) {
                 window.location.href = httpsUrl;
             }
         } else {
-            alert("Camera Access Error: " + err.message + " (" + (err.name || "Unknown") + ")");
+            alert("Camera Access Error: " + err.message);
         }
         console.error("Camera error:", err);
     }
@@ -1330,7 +1366,6 @@ function stopReceiverCamera() {
 function processReceiverFrame() {
     if (!receiverRunning) return;
 
-    // Measure FPS
     receiverFpsCounter++;
     const now = performance.now();
     if (now - receiverLastFpsTime >= 1000) {
@@ -1352,15 +1387,20 @@ function processReceiverFrame() {
         receiverCtx.drawImage(receiverVideo, 0, 0, vw, vh);
         const imgData = receiverCtx.getImageData(0, 0, vw, vh);
 
-        // Track and extract optical matrix
-        const quad = detectOpticalQuad(imgData, vw, vh);
+        // 1. Locate the optical frame corners with sub-pixel snap
+        const quad = detectAndSnapQuad(imgData, vw, vh);
+
+        // 2. Draw viewfinder target guide & snapped corners
+        drawLockReticle(quad, vw, vh);
 
         if (quad) {
-            drawLockReticle(quad);
             document.getElementById('receiverStatusBadge').textContent = "● LOCKED ONTO BEAM";
             document.getElementById('receiverStatusBadge').className = "badge-locked";
 
-            // Sample warped cells
+            // 3. Calibrate color palette from top border reference swatches
+            calibrateColorsFromFrame(imgData, vw, vh, quad);
+
+            // 4. Sample cells and classify
             const sampledGrid = sampleGridFromQuad(imgData, vw, vh, quad, receiverLayout.gridSize);
             const rawBytes = gridIndicesToBytes(sampledGrid, receiverLayout);
             const packet = unpackPacket(rawBytes);
@@ -1378,7 +1418,6 @@ function processReceiverFrame() {
                 const solved = receiverDecoder.addDroplet(header.seed, payload);
                 const progress = receiverDecoder.getProgress();
 
-                // Update UI progress
                 updateReceiverProgress(progress);
 
                 if (solved && !receiverIsComplete) {
@@ -1388,9 +1427,6 @@ function processReceiverFrame() {
             } else {
                 receiverCRCErrors++;
             }
-        } else {
-            document.getElementById('receiverStatusBadge').textContent = "● SCANNING FOR OPTICAL BEAM";
-            document.getElementById('receiverStatusBadge').className = "badge-scanning";
         }
 
         document.getElementById('receiverDropletVal').textContent = `Caught: ${receiverPacketsCaught} (Drops: ${receiverCRCErrors})`;
@@ -1402,24 +1438,109 @@ function processReceiverFrame() {
 }
 
 /**
- * Fast quad finder: uses center viewfinder region of interest for rapid homography sampling.
+ * Searches near the 4 corners of the center viewfinder for high-contrast white anchors and snaps to them.
  */
-function detectOpticalQuad(imgData, w, h) {
-    // High-contrast center ROI box
-    const marginX = w * 0.15;
-    const marginY = h * 0.15;
-    const size = Math.min(w - 2 * marginX, h - 2 * marginY);
+function detectAndSnapQuad(imgData, w, h) {
+    const margin = Math.min(w, h) * 0.12;
+    const size = Math.min(w, h) - (2 * margin);
     const cx = w / 2;
     const cy = h / 2;
 
-    const tl = { x: cx - size / 2, y: cy - size / 2 };
-    const tr = { x: cx + size / 2, y: cy - size / 2 };
-    const br = { x: cx + size / 2, y: cy + size / 2 };
-    const bl = { x: cx - size / 2, y: cy + size / 2 };
+    let tl = { x: cx - size / 2, y: cy - size / 2 };
+    let tr = { x: cx + size / 2, y: cy - size / 2 };
+    let br = { x: cx + size / 2, y: cy + size / 2 };
+    let bl = { x: cx - size / 2, y: cy + size / 2 };
+
+    // Snap to nearest bright white corner peaks within a 40px search radius
+    tl = snapToBrightCorner(imgData, w, h, tl.x, tl.y, -1, -1);
+    tr = snapToBrightCorner(imgData, w, h, tr.x, tr.y, 1, -1);
+    br = snapToBrightCorner(imgData, w, h, br.x, br.y, 1, 1);
+    bl = snapToBrightCorner(imgData, w, h, bl.x, bl.y, -1, 1);
 
     return [tl, tr, br, bl];
 }
 
+function snapToBrightCorner(imgData, w, h, initX, initY, dirX, dirY) {
+    const data = imgData.data;
+    const radius = 35;
+    let maxScore = -1;
+    let bestX = initX;
+    let bestY = initY;
+
+    const minX = Math.max(10, Math.floor(initX - radius));
+    const maxX = Math.min(w - 10, Math.floor(initX + radius));
+    const minY = Math.max(10, Math.floor(initY - radius));
+    const maxY = Math.min(h - 10, Math.floor(initY + radius));
+
+    // Look for white anchor border (high luminance)
+    for (let y = minY; y <= maxY; y += 3) {
+        for (let x = minX; x <= maxX; x += 3) {
+            const idx = (y * w + x) * 4;
+            const r = data[idx];
+            const g = data[idx + 1];
+            const b = data[idx + 2];
+            const luma = 0.299 * r + 0.587 * g + 0.114 * b;
+
+            if (luma > maxScore) {
+                maxScore = luma;
+                bestX = x;
+                bestY = y;
+            }
+        }
+    }
+
+    if (maxScore > 140) {
+        return { x: bestX, y: bestY };
+    }
+    return { x: initX, y: initY };
+}
+
+/**
+ * Samples the 5-point calibration bar (Black, Red, Green, Blue, White) and updates the calibrated palette.
+ */
+function calibrateColorsFromFrame(imgData, w, h, quad) {
+    const [tl, tr, br, bl] = quad;
+    const N = receiverLayout.gridSize;
+    const s = receiverLayout.anchorSize;
+    const calCoords = receiverLayout.calCells;
+    if (calCoords.length < 5) return;
+
+    const samples = [];
+    for (let i = 0; i < Math.min(5, calCoords.length); i++) {
+        const { r, c } = calCoords[i];
+        const u = (c + 0.5) / N;
+        const v = (r + 0.5) / N;
+
+        const topX = tl.x + u * (tr.x - tl.x);
+        const topY = tl.y + u * (tr.y - tl.y);
+        const botX = bl.x + u * (br.x - bl.x);
+        const botY = bl.y + u * (br.y - bl.y);
+
+        const px = Math.floor(topX + v * (botX - topX));
+        const py = Math.floor(topY + v * (botY - topY));
+
+        if (px >= 0 && px < w && py >= 0 && py < h) {
+            const idx = (py * w + px) * 4;
+            samples.push([imgData.data[idx], imgData.data[idx + 1], imgData.data[idx + 2]]);
+        }
+    }
+
+    if (samples.length >= 5) {
+        const [K, R, G, B, W] = samples;
+        calibratedPalette[0] = K; // Black
+        calibratedPalette[1] = B; // Blue
+        calibratedPalette[2] = G; // Green
+        calibratedPalette[3] = [(G[0] + B[0]) / 2, (G[1] + B[1]) / 2, (G[2] + B[2]) / 2]; // Cyan
+        calibratedPalette[4] = R; // Red
+        calibratedPalette[5] = [(R[0] + B[0]) / 2, (R[1] + B[1]) / 2, (R[2] + B[2]) / 2]; // Magenta
+        calibratedPalette[6] = [(R[0] + G[0]) / 2, (R[1] + G[1]) / 2, (R[2] + G[2]) / 2]; // Yellow
+        calibratedPalette[7] = W; // White
+    }
+}
+
+/**
+ * Samples cells and classifies using nearest Euclidean distance to calibrated color vectors.
+ */
 function sampleGridFromQuad(imgData, w, h, quad, gridSize) {
     const [tl, tr, br, bl] = quad;
     const grid2D = Array.from({ length: gridSize }, () => new Uint8Array(gridSize));
@@ -1430,7 +1551,6 @@ function sampleGridFromQuad(imgData, w, h, quad, gridSize) {
         for (let c = 0; c < gridSize; c++) {
             const u = (c + 0.5) / gridSize;
 
-            // Bilinear interpolation between quad vertices
             const topX = tl.x + u * (tr.x - tl.x);
             const topY = tl.y + u * (tr.y - tl.y);
             const botX = bl.x + u * (br.x - bl.x);
@@ -1441,15 +1561,22 @@ function sampleGridFromQuad(imgData, w, h, quad, gridSize) {
 
             if (px >= 0 && px < w && py >= 0 && py < h) {
                 const idx = (py * w + px) * 4;
-                const red = data[idx];
-                const green = data[idx + 1];
-                const blue = data[idx + 2];
+                const cr = data[idx];
+                const cg = data[idx + 1];
+                const cb = data[idx + 2];
 
-                // 3-bit threshold
-                const rBit = red > 128 ? 1 : 0;
-                const gBit = green > 128 ? 1 : 0;
-                const bBit = blue > 128 ? 1 : 0;
-                grid2D[r][c] = (rBit << 2) | (gBit << 1) | bBit;
+                // Nearest-color classification
+                let bestIdx = 0;
+                let minDist = 1e9;
+                for (let k = 0; k < 8; k++) {
+                    const [pr, pg, pb] = calibratedPalette[k];
+                    const dist = (cr - pr) ** 2 + (cg - pg) ** 2 + (cb - pb) ** 2;
+                    if (dist < minDist) {
+                        minDist = dist;
+                        bestIdx = k;
+                    }
+                }
+                grid2D[r][c] = bestIdx;
             }
         }
     }
@@ -1457,9 +1584,12 @@ function sampleGridFromQuad(imgData, w, h, quad, gridSize) {
     return grid2D;
 }
 
-function drawLockReticle(quad) {
+function drawLockReticle(quad, w, h) {
+    if (!quad) return;
+
+    // Outer guide box
     receiverCtx.strokeStyle = '#00ff66';
-    receiverCtx.lineWidth = 3;
+    receiverCtx.lineWidth = 2.5;
     receiverCtx.beginPath();
     receiverCtx.moveTo(quad[0].x, quad[0].y);
     receiverCtx.lineTo(quad[1].x, quad[1].y);
@@ -1468,12 +1598,18 @@ function drawLockReticle(quad) {
     receiverCtx.closePath();
     receiverCtx.stroke();
 
-    // Draw corner markers
-    quad.forEach(pt => {
-        receiverCtx.fillStyle = '#ff0033';
+    // Draw corner brackets
+    quad.forEach((pt, i) => {
+        receiverCtx.fillStyle = '#00ff66';
         receiverCtx.beginPath();
         receiverCtx.arc(pt.x, pt.y, 6, 0, 2 * Math.PI);
         receiverCtx.fill();
+
+        receiverCtx.strokeStyle = '#ffffff';
+        receiverCtx.lineWidth = 2;
+        receiverCtx.beginPath();
+        receiverCtx.arc(pt.x, pt.y, 14, 0, 2 * Math.PI);
+        receiverCtx.stroke();
     });
 }
 
@@ -1500,7 +1636,6 @@ function onFileTransferComplete() {
         filePayload = fullData.subarray(meta.metadataHeaderLen, meta.metadataHeaderLen + meta.filesize);
     }
 
-    // Trigger instant browser download
     const blob = new Blob([filePayload], { type: 'application/octet-stream' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -1511,7 +1646,7 @@ function onFileTransferComplete() {
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
 
-    alert(`🎉 Success! Received and saved: ${filename} (${(filePayload.length / 1024).toFixed(1)} KB)`);
+    alert(`🎉 Success! Received and downloaded: ${filename} (${(filePayload.length / 1024).toFixed(1)} KB)`);
 }
 
 

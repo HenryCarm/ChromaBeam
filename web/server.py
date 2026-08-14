@@ -1,25 +1,22 @@
 """
-ChromaBeam Secure HTTPS & LAN Server
-Serves over HTTPS to enable camera/microphone permissions in mobile Chrome, Brave, Safari, and Samsung Internet.
+ChromaBeam Threaded HTTPS Server
+Serves static assets over HTTPS with concurrent request handling for mobile devices.
 """
 
 import http.server
-import socketserver
 import ssl
 import socket
 import os
 import sys
+import functools
 
 PORT = 8443
-HTTP_PORT = 8080
 DIRECTORY = os.path.dirname(os.path.abspath(__file__))
-CERT_DIR = os.path.join(DIRECTORY, "cert")
-CERT_FILE = os.path.join(CERT_DIR, "cert.pem")
-KEY_FILE = os.path.join(CERT_DIR, "key.pem")
+CERT_FILE = os.path.join(DIRECTORY, "cert", "cert.pem")
+KEY_FILE = os.path.join(DIRECTORY, "cert", "key.pem")
 
 
 def get_local_ip() -> str:
-    """Returns local LAN IP address."""
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
         s.connect(('10.255.255.255', 1))
@@ -31,48 +28,18 @@ def get_local_ip() -> str:
     return ip
 
 
-class Handler(http.server.SimpleHTTPRequestHandler):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, directory=DIRECTORY, **kwargs)
+def run():
+    handler_class = functools.partial(http.server.SimpleHTTPRequestHandler, directory=DIRECTORY)
+    server = http.server.ThreadingHTTPServer(('0.0.0.0', PORT), handler_class)
 
-    def log_message(self, format, *args):
-        print(f"[ChromaBeam Server] {args[0]} - {args[1]}")
+    ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ssl_context.load_cert_chain(certfile=CERT_FILE, keyfile=KEY_FILE)
+    server.socket = ssl_context.wrap_socket(server.socket, server_side=True)
 
-
-def run_https_server(port: int = PORT):
-    local_ip = get_local_ip()
-    server_address = ('0.0.0.0', port)
-    
-    socketserver.TCPServer.allow_reuse_address = True
-    httpd = socketserver.TCPServer(server_address, Handler)
-
-    # SSL Context
-    if os.path.exists(CERT_FILE) and os.path.exists(KEY_FILE):
-        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        context.load_cert_chain(certfile=CERT_FILE, keyfile=KEY_FILE)
-        httpd.socket = context.wrap_socket(httpd.socket, server_side=True)
-        proto = "https"
-    else:
-        proto = "http"
-
-    print("\n" + "=" * 65)
-    print("  ⚡ CHROMABEAM SECURE OPTICAL FILE TRANSFER SERVER ⚡")
-    print("=" * 65)
-    print(f"  • Secure Mobile / LAN Link:   {proto}://{local_ip}:{port}")
-    print(f"  • Local Machine Link:         {proto}://localhost:{port}")
-    print("=" * 65)
-    print("  📱 Open the link on your phone in Chrome / Samsung Internet / Safari.")
-    print("  ⚠️  Because this uses a local self-signed certificate:")
-    print("     Tap 'Advanced' -> 'Proceed to site (unsafe)' once.")
-    print("  📸 Then tap 'Start Camera Receiver' — camera will activate instantly!")
-    print("=" * 65 + "\n")
-
-    try:
-        httpd.serve_forever()
-    except KeyboardInterrupt:
-        print("\n[ChromaBeam] Server stopped.")
+    ip = get_local_ip()
+    print(f"\n[ChromaBeam] Threaded HTTPS Server is RUNNING at: https://{ip}:{PORT}/\n", flush=True)
+    server.serve_forever()
 
 
 if __name__ == '__main__':
-    p = int(sys.argv[1]) if len(sys.argv) > 1 else PORT
-    run_https_server(p)
+    run()
