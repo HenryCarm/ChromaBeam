@@ -1,67 +1,88 @@
 /**
- * ChromaBeam Pure JavaScript 3D Perspective & Computer Vision Engine v2
+ * ChromaBeam Pure JavaScript 3D Perspective & Computer Vision Engine v3
  * 
  * Features:
- * - 4-Point Projective Transform (Homography)
+ * - Direct 4-Anchor 3D Homography (DLT Solver)
+ * - 2D Cross-Checked 1:1:1:1:1 Scanline Locator (Horizontal + Vertical Verification)
+ * - Multi-Thresholding Strategy (Adaptive Otsu + Delta sweeps)
  * - 360° 4-Way Rotation Invariance (0°, 90°, 180°, 270°)
- * - Multi-Thresholding Strategy (Otsu, Adaptive Median, Contrast-Boosted)
- * - Dynamic Lighting & Glare Compensation
- * - Full Diagnostic Telemetry Export
- * - Real-Time Debug Binarizer Renderer
+ * - Subpixel Anti-Aliased Cell Sampling
+ * - Zero Desktop UI Contamination (Locks strictly to matrix anchors)
  */
 
-class ProjectiveTransform {
-    constructor(p0, p1, p2, p3) {
-        // Maps unit square (0,0)-(1,0)-(1,1)-(0,1) to quad (p0, p1, p2, p3)
-        // p0: TL, p1: TR, p2: BR, p3: BL
-        const x0 = p0.x, y0 = p0.y;
-        const x1 = p1.x, y1 = p1.y;
-        const x2 = p2.x, y2 = p2.y;
-        const x3 = p3.x, y3 = p3.y;
+function solve8x8(A, b) {
+    const n = 8;
+    const M = Array.from({ length: n }, (_, i) => [...A[i], b[i]]);
 
-        const dx1 = x1 - x2;
-        const dx2 = x3 - x2;
-        const sx = x0 - x1 + x2 - x3;
-        const dy1 = y1 - y2;
-        const dy2 = y3 - y2;
-        const sy = y0 - y1 + y2 - y3;
+    for (let i = 0; i < n; i++) {
+        let maxRow = i;
+        for (let k = i + 1; k < n; k++) {
+            if (Math.abs(M[k][i]) > Math.abs(M[maxRow][i])) maxRow = k;
+        }
+        [M[i], M[maxRow]] = [M[maxRow], M[i]];
 
-        if (Math.abs(sx) < 1e-6 && Math.abs(sy) < 1e-6) {
-            // Affine transform
-            this.a = x1 - x0;
-            this.b = x3 - x0;
-            this.c = x0;
-            this.d = y1 - y0;
-            this.e = y3 - y0;
-            this.f = y0;
-            this.g = 0;
-            this.h = 0;
-        } else {
-            // Perspective transform
-            const det = dx1 * dy2 - dx2 * dy1;
-            if (Math.abs(det) < 1e-7) {
-                this.a = x1 - x0; this.b = x3 - x0; this.c = x0;
-                this.d = y1 - y0; this.e = y3 - y0; this.f = y0;
-                this.g = 0; this.h = 0;
-            } else {
-                this.g = (sx * dy2 - dx2 * sy) / det;
-                this.h = (dx1 * sy - sx * dy1) / det;
-                this.a = x1 - x0 + this.g * x1;
-                this.b = x3 - x0 + this.h * x3;
-                this.c = x0;
-                this.d = y1 - y0 + this.g * y1;
-                this.e = y3 - y0 + this.h * y3;
-                this.f = y0;
+        if (Math.abs(M[i][i]) < 1e-12) return null;
+
+        for (let k = i + 1; k < n; k++) {
+            const factor = M[k][i] / M[i][i];
+            for (let j = i; j <= n; j++) {
+                M[k][j] -= factor * M[i][j];
             }
         }
     }
 
+    const x = new Float64Array(n);
+    for (let i = n - 1; i >= 0; i--) {
+        let sum = M[i][n];
+        for (let j = i + 1; j < n; j++) sum -= M[i][j] * x[j];
+        x[i] = sum / M[i][i];
+    }
+    return x;
+}
+
+class ProjectiveTransform {
+    constructor(srcPts, dstPts) {
+        // If 4 arguments are passed (legacy: p0, p1, p2, p3), map unit square to quad
+        if (arguments.length === 4) {
+            const p0 = arguments[0], p1 = arguments[1], p2 = arguments[2], p3 = arguments[3];
+            srcPts = [{ u: 0, v: 0 }, { u: 1, v: 0 }, { u: 1, v: 1 }, { u: 0, v: 1 }];
+            dstPts = [p0, p1, p2, p3];
+        }
+
+        const A = [];
+        const b = [];
+
+        for (let i = 0; i < 4; i++) {
+            const u = srcPts[i].u !== undefined ? srcPts[i].u : srcPts[i].x;
+            const v = srcPts[i].v !== undefined ? srcPts[i].v : srcPts[i].y;
+            const x = dstPts[i].x;
+            const y = dstPts[i].y;
+
+            A.push([u, v, 1, 0, 0, 0, -x * u, -x * v]);
+            b.push(x);
+            A.push([0, 0, 0, u, v, 1, -y * u, -y * v]);
+            b.push(y);
+        }
+
+        const h = solve8x8(A, b);
+        if (!h) {
+            this.valid = false;
+            return;
+        }
+
+        this.valid = true;
+        this.h00 = h[0]; this.h01 = h[1]; this.h02 = h[2];
+        this.h10 = h[3]; this.h11 = h[4]; this.h12 = h[5];
+        this.h20 = h[6]; this.h21 = h[7];
+    }
+
     transform(u, v) {
-        const W = this.g * u + this.h * v + 1.0;
-        if (Math.abs(W) < 1e-7) return { x: this.c, y: this.f };
+        if (!this.valid) return { x: 0, y: 0 };
+        const W = this.h20 * u + this.h21 * v + 1.0;
+        if (Math.abs(W) < 1e-9) return { x: 0, y: 0 };
         return {
-            x: (this.a * u + this.b * v + this.c) / W,
-            y: (this.d * u + this.e * v + this.f) / W
+            x: (this.h00 * u + this.h01 * v + this.h02) / W,
+            y: (this.h10 * u + this.h11 * v + this.h12) / W
         };
     }
 }
@@ -90,8 +111,8 @@ function rotateGrid2D(grid2D, rotationSteps) {
 }
 
 /**
- * Samples a grid from an arbitrary 4-point quadrilateral using 3D perspective mapping.
- * Uses 3x3 multi-pixel bilinear subpixel averaging to eliminate moire and camera noise.
+ * Samples a grid using projective homography mapping.
+ * If quad.isAnchorCenters is true, maps canonical layout.anchorCenters directly to the 4 corners.
  */
 function sampleQuadGrid(imgData, w, h, quad, layout, customThreshold = null) {
     const N = layout.gridSize;
@@ -99,7 +120,16 @@ function sampleQuadGrid(imgData, w, h, quad, layout, customThreshold = null) {
     const palette = layout.palette;
     const data = imgData.data;
 
-    const transform = new ProjectiveTransform(quad[0], quad[1], quad[2], quad[3]);
+    let transform;
+    if (quad.isAnchorCenters && layout.anchorCenters) {
+        transform = new ProjectiveTransform(layout.anchorCenters, quad);
+    } else {
+        transform = new ProjectiveTransform(
+            [{ u: 0, v: 0 }, { u: 1, v: 0 }, { u: 1, v: 1 }, { u: 0, v: 1 }],
+            quad
+        );
+    }
+
     const grid2D = Array.from({ length: N }, () => new Uint8Array(N));
 
     let minLuma = 255;
@@ -138,12 +168,11 @@ function sampleQuadGrid(imgData, w, h, quad, layout, customThreshold = null) {
         const v = (r + 0.5) / N;
         for (let c = 0; c < N; c++) {
             const u = (c + 0.5) / N;
-            
+
             const pt = transform.transform(u, v);
             const cx = pt.x;
             const cy = pt.y;
 
-            // Approximate subpixel sampling radius
             const ptRight = transform.transform((c + 1.0) / N, v);
             const cellRadius = Math.max(1.0, Math.hypot(ptRight.x - cx, ptRight.y - cy) * 0.22);
 
@@ -194,7 +223,7 @@ function sampleQuadGrid(imgData, w, h, quad, layout, customThreshold = null) {
         lumaThreshold,
         minLuma: Math.round(minLuma),
         maxLuma: Math.round(maxLuma),
-        contrast: Math.round(maxLuma - minLuma)
+        contrast: Math.max(0, Math.round(maxLuma - minLuma))
     };
 }
 
@@ -237,143 +266,195 @@ function calculateOtsuFromLumaArray(samples) {
 function detectOpticalQuad(imgData, w, h, guideRect) {
     const data = imgData.data;
 
-    // 1. First Pass: Anchor Pattern Matching (1:1:1:1:1 concentric squares)
-    const anchorClusters = findAnchorClusters(data, w, h);
-    if (anchorClusters && anchorClusters.length === 4) {
-        const orderedAnchors = orderQuadPointsClockwise(anchorClusters);
-        const cx = (orderedAnchors[0].x + orderedAnchors[1].x + orderedAnchors[2].x + orderedAnchors[3].x) / 4;
-        const cy = (orderedAnchors[0].y + orderedAnchors[1].y + orderedAnchors[2].y + orderedAnchors[3].y) / 4;
-        const scale = 1.08;
-
-        const quad = orderedAnchors.map(pt => ({
-            x: Math.max(0, Math.min(w - 1, cx + (pt.x - cx) * scale)),
-            y: Math.max(0, Math.min(h - 1, cy + (pt.y - cy) * scale))
-        }));
-
-        return { quad, method: '4-Anchor Finder', confidence: 0.95 };
+    // 1. Primary Pass: 2D Cross-Checked 1:1:1:1:1 Finder Pattern Detection
+    const anchors = find2DAnchorQuad(data, w, h);
+    if (anchors && anchors.length === 4) {
+        anchors.isAnchorCenters = true;
+        return { quad: anchors, method: '4-Anchor 3D Homography', confidence: 0.98 };
     }
 
-    // 2. Second Pass: Adaptive dynamic bounds inside guide region
+    // 2. Fallback: Guide Region Quad
     const gx = guideRect ? guideRect.x : Math.floor(w * 0.1);
     const gy = guideRect ? guideRect.y : Math.floor(h * 0.1);
     const gw = guideRect ? guideRect.w : Math.floor(w * 0.8);
     const gh = guideRect ? guideRect.h : Math.floor(h * 0.8);
 
-    const bounds = detectAdaptiveContrastBounds(data, w, h, gx, gy, gw, gh);
-    if (bounds) {
-        const quad = [
-            { x: bounds.x, y: bounds.y },
-            { x: bounds.x + bounds.w, y: bounds.y },
-            { x: bounds.x + bounds.w, y: bounds.y + bounds.h },
-            { x: bounds.x, y: bounds.y + bounds.h }
-        ];
-        return { quad, method: 'Adaptive Boundary', confidence: 0.80 };
-    }
-
-    // 3. Fallback: Guide Region Quad
     const defaultQuad = [
         { x: gx, y: gy },
         { x: gx + gw, y: gy },
         { x: gx + gw, y: gy + gh },
         { x: gx, y: gy + gh }
     ];
-    return { quad: defaultQuad, method: 'Viewfinder ROI', confidence: 0.50 };
+    defaultQuad.isAnchorCenters = false;
+    return { quad: defaultQuad, method: 'Viewfinder ROI', confidence: 0.40 };
 }
 
-function findAnchorClusters(data, w, h) {
-    const candidates = [];
-    const stepY = Math.max(4, Math.floor(h / 90));
-
-    // Dynamic contrast determination
-    let minL = 255, maxL = 0;
-    for (let i = 0; i < Math.min(data.length, 20000); i += 16) {
-        const l = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
-        if (l < minL) minL = l;
-        if (l > maxL) maxL = l;
+function find2DAnchorQuad(data, w, h) {
+    // 1. Fast Grayscale Conversion
+    const gray = new Uint8Array(w * h);
+    for (let i = 0; i < w * h; i++) {
+        const idx = i * 4;
+        gray[i] = (data[idx] * 77 + data[idx + 1] * 150 + data[idx + 2] * 29) >> 8;
     }
-    const midLuma = (minL + maxL) * 0.5;
-    if (maxL - minL < 30) return null; // Too low contrast to distinguish anchors
 
-    for (let y = 10; y < h - 10; y += stepY) {
-        let state = 0;
-        let counts = [0, 0, 0, 0, 0];
-        let lastColor = 0;
+    // 2. Sample 2D Otsu Threshold
+    const hist = new Int32Array(256);
+    let sampleCount = 0;
+    for (let y = 0; y < h; y += 4) {
+        for (let x = 0; x < w; x += 4) {
+            hist[gray[y * w + x]]++;
+            sampleCount++;
+        }
+    }
 
-        for (let x = 10; x < w - 10; x += 2) {
-            const idx = (y * w + x) * 4;
-            const luma = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
-            const color = (luma > midLuma) ? 1 : 0;
+    let sumTotal = 0;
+    for (let i = 0; i < 256; i++) sumTotal += i * hist[i];
+    let sumBg = 0, weightBg = 0, maxVar = 0, globalThresh = 128;
 
-            if (x === 10) {
-                lastColor = color;
-                counts[0] = 1;
-                state = 0;
-                continue;
-            }
+    for (let t = 0; t < 256; t++) {
+        weightBg += hist[t];
+        if (weightBg === 0) continue;
+        const weightFg = sampleCount - weightBg;
+        if (weightFg === 0) break;
 
-            if (color === lastColor) {
-                counts[state]++;
-            } else {
-                if (state < 4) {
-                    state++;
-                    counts[state] = 1;
+        sumBg += t * hist[t];
+        const meanBg = sumBg / weightBg;
+        const meanFg = (sumTotal - sumBg) / weightFg;
+        const variance = weightBg * weightFg * (meanBg - meanFg) * (meanBg - meanFg);
+        if (variance > maxVar) {
+            maxVar = variance;
+            globalThresh = t;
+        }
+    }
+
+    const thresholdsToTry = [
+        globalThresh,
+        Math.max(20, globalThresh - 25),
+        Math.min(235, globalThresh + 25)
+    ];
+
+    const allCandidates = [];
+
+    // 3. Scanline Search with 2D Vertical Verification
+    for (const T of thresholdsToTry) {
+        const stepY = 3;
+        for (let y = 10; y < h - 10; y += stepY) {
+            let stateCount = [0, 0, 0, 0, 0];
+            let currentState = 0;
+            let lastColor = (gray[y * w + 10] > T) ? 1 : 0;
+
+            for (let x = 10; x < w - 10; x++) {
+                const color = (gray[y * w + x] > T) ? 1 : 0;
+                if (color === lastColor) {
+                    stateCount[currentState]++;
                 } else {
-                    if (counts[0] > 1 && counts[1] > 1 && counts[2] > 1 && counts[3] > 1 && counts[4] > 1) {
-                        const total = counts[0] + counts[1] + counts[2] + counts[3] + counts[4];
-                        const avg = total / 5.0;
-                        const maxDiff = Math.max(...counts.map(c => Math.abs(c - avg)));
-                        if (maxDiff < avg * 1.8 && total >= 12 && total < w * 0.45) {
-                            const centerX = x - (counts[4] + counts[3] + counts[2] / 2);
-                            candidates.push({ x: centerX, y });
+                    if (currentState < 4) {
+                        currentState++;
+                        stateCount[currentState] = 1;
+                    } else {
+                        // Check 1:1:1:1:1 ratio
+                        if (checkRatio11111(stateCount, w)) {
+                            const totalW = stateCount[0] + stateCount[1] + stateCount[2] + stateCount[3] + stateCount[4];
+                            const centerX = x - stateCount[4] - stateCount[3] - Math.floor(stateCount[2] / 2);
+
+                            // Cross-validate vertically
+                            const vertRes = checkVerticalCrossSection(gray, w, h, centerX, y, T, totalW);
+                            if (vertRes) {
+                                allCandidates.push({
+                                    x: centerX,
+                                    y: vertRes.centerY,
+                                    size: (totalW + vertRes.totalH) / 2
+                                });
+                            }
                         }
+                        stateCount[0] = stateCount[2];
+                        stateCount[1] = stateCount[3];
+                        stateCount[2] = stateCount[4];
+                        stateCount[3] = 1;
+                        stateCount[4] = 0;
+                        currentState = 3;
                     }
-                    counts[0] = counts[2];
-                    counts[1] = counts[3];
-                    counts[2] = counts[4];
-                    counts[3] = 1;
-                    counts[4] = 0;
-                    state = 3;
+                    lastColor = color;
                 }
-                lastColor = color;
             }
         }
     }
 
-    if (candidates.length < 4) return null;
+    if (allCandidates.length < 4) return null;
 
+    // 4. Cluster Anchor Points
     const clusters = [];
-    const radius = Math.min(w, h) * 0.09;
-
-    for (const pt of candidates) {
-        let found = false;
+    for (const cand of allCandidates) {
+        let matched = false;
         for (const cl of clusters) {
-            if (Math.hypot(cl.x - pt.x, cl.y - pt.y) < radius) {
-                cl.x = (cl.x * cl.count + pt.x) / (cl.count + 1);
-                cl.y = (cl.y * cl.count + pt.y) / (cl.count + 1);
+            if (Math.hypot(cand.x - cl.x, cand.y - cl.y) < 16.0) {
+                cl.x = (cl.x * cl.count + cand.x) / (cl.count + 1);
+                cl.y = (cl.y * cl.count + cand.y) / (cl.count + 1);
+                cl.size = (cl.size * cl.count + cand.size) / (cl.count + 1);
                 cl.count++;
-                found = true;
+                matched = true;
                 break;
             }
         }
-        if (!found) {
-            clusters.push({ x: pt.x, y: pt.y, count: 1 });
+        if (!matched) {
+            clusters.push({ x: cand.x, y: cand.y, size: cand.size, count: 1 });
         }
     }
 
     clusters.sort((a, b) => b.count - a.count);
-    if (clusters.length >= 4) {
-        const top4 = clusters.slice(0, 4);
-        const minDistance = Math.min(w, h) * 0.12;
-        for (let i = 0; i < 4; i++) {
-            for (let j = i + 1; j < 4; j++) {
-                if (Math.hypot(top4[i].x - top4[j].x, top4[i].y - top4[j].y) < minDistance) {
-                    return null;
-                }
-            }
-        }
-        return top4;
-    }
+    return findBestAnchorQuad(clusters);
+}
 
+function checkRatio11111(counts, maxW) {
+    const total = counts[0] + counts[1] + counts[2] + counts[3] + counts[4];
+    if (total < 8 || total > maxW * 0.45) return false;
+    const avg = total / 5.0;
+    const maxVar = avg * 0.90;
+    for (let i = 0; i < 5; i++) {
+        if (Math.abs(counts[i] - avg) > maxVar || counts[i] === 0) return false;
+    }
+    return true;
+}
+
+function checkVerticalCrossSection(gray, w, h, cx, startY, T, expectedW) {
+    const span = Math.min(h - 1 - startY, startY, Math.floor(expectedW * 1.6));
+    if (span < 6) return null;
+
+    let stateCount = [0, 0, 0, 0, 0];
+    const topY = Math.max(0, startY - span);
+    const botY = Math.min(h - 1, startY + span);
+
+    let currentState = 0;
+    let lastColor = (gray[topY * w + cx] > T) ? 1 : 0;
+
+    for (let y = topY; y <= botY; y++) {
+        const color = (gray[y * w + cx] > T) ? 1 : 0;
+        if (color === lastColor) {
+            stateCount[currentState]++;
+        } else {
+            if (currentState < 4) {
+                currentState++;
+                stateCount[currentState] = 1;
+            } else {
+                if (checkRatio11111(stateCount, w)) {
+                    const totalH = stateCount[0] + stateCount[1] + stateCount[2] + stateCount[3] + stateCount[4];
+                    if (Math.abs(totalH - expectedW) / Math.max(totalH, expectedW) < 0.70) {
+                        const centerY = y - stateCount[4] - stateCount[3] - Math.floor(stateCount[2] / 2);
+                        if (Math.abs(centerY - startY) < expectedW * 0.7) {
+                            return { centerY, totalH };
+                        }
+                    }
+                }
+                stateCount[0] = stateCount[2];
+                stateCount[1] = stateCount[3];
+                stateCount[2] = stateCount[4];
+                stateCount[3] = 1;
+                stateCount[4] = 0;
+                currentState = 3;
+            }
+            lastColor = color;
+        }
+    }
     return null;
 }
 
@@ -382,19 +463,13 @@ function orderQuadPointsClockwise(pts) {
     const cy = (pts[0].y + pts[1].y + pts[2].y + pts[3].y) / 4;
 
     const sorted = pts.slice().sort((a, b) => {
-        const angleA = Math.atan2(a.y - cy, a.x - cx);
-        const angleB = Math.atan2(b.y - cy, b.x - cx);
-        return angleA - angleB;
+        return Math.atan2(a.y - cy, a.x - cx) - Math.atan2(b.y - cy, b.x - cx);
     });
 
-    let tlIdx = 0;
-    let minSum = Infinity;
+    let tlIdx = 0, minSum = Infinity;
     for (let i = 0; i < 4; i++) {
-        const sum = sorted[i].x + sorted[i].y;
-        if (sum < minSum) {
-            minSum = sum;
-            tlIdx = i;
-        }
+        const s = sorted[i].x + sorted[i].y;
+        if (s < minSum) { minSum = s; tlIdx = i; }
     }
 
     return [
@@ -405,80 +480,49 @@ function orderQuadPointsClockwise(pts) {
     ];
 }
 
-function detectAdaptiveContrastBounds(data, imgW, imgH, gx, gy, gw, gh) {
-    // Dynamic sample of luma in guide region
-    let minLuma = 255, maxLuma = 0;
-    for (let y = gy; y < gy + gh; y += 8) {
-        for (let x = gx; x < gx + gw; x += 8) {
-            const idx = (y * imgW + x) * 4;
-            const l = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
-            if (l < minLuma) minLuma = l;
-            if (l > maxLuma) maxLuma = l;
+function findBestAnchorQuad(clusters) {
+    if (clusters.length < 4) return null;
+    const N = Math.min(clusters.length, 10);
+    let bestQuad = null;
+    let bestScore = -Infinity;
+
+    for (let i = 0; i < N; i++) {
+        for (let j = i + 1; j < N; j++) {
+            for (let k = j + 1; k < N; k++) {
+                for (let l = k + 1; l < N; l++) {
+                    const combo = [
+                        { x: clusters[i].x, y: clusters[i].y },
+                        { x: clusters[j].x, y: clusters[j].y },
+                        { x: clusters[k].x, y: clusters[k].y },
+                        { x: clusters[l].x, y: clusters[l].y }
+                    ];
+
+                    const ordered = orderQuadPointsClockwise(combo);
+                    const d01 = Math.hypot(ordered[0].x - ordered[1].x, ordered[0].y - ordered[1].y);
+                    const d12 = Math.hypot(ordered[1].x - ordered[2].x, ordered[1].y - ordered[2].y);
+                    const d23 = Math.hypot(ordered[2].x - ordered[3].x, ordered[2].y - ordered[3].y);
+                    const d30 = Math.hypot(ordered[3].x - ordered[0].x, ordered[3].y - ordered[0].y);
+
+                    const minSide = Math.min(d01, d12, d23, d30);
+                    const maxSide = Math.max(d01, d12, d23, d30);
+
+                    if (minSide < 30) continue;
+                    if (maxSide / minSide > 2.2) continue; // Convex aspect check
+
+                    const diag1 = Math.hypot(ordered[0].x - ordered[2].x, ordered[0].y - ordered[2].y);
+                    const diag2 = Math.hypot(ordered[1].x - ordered[3].x, ordered[1].y - ordered[3].y);
+                    if (Math.abs(diag1 - diag2) / Math.max(diag1, diag2) > 0.40) continue;
+
+                    const score = (clusters[i].count + clusters[j].count + clusters[k].count + clusters[l].count) * 10.0 - (maxSide / minSide);
+                    if (score > bestScore) {
+                        bestScore = score;
+                        bestQuad = ordered;
+                    }
+                }
+            }
         }
     }
-
-    const contrast = maxLuma - minLuma;
-    if (contrast < 35) return null; // Insufficient lighting contrast
-
-    const threshold = minLuma + contrast * 0.45;
-    const MIN_BRIGHT = 2;
-    let top = -1, bottom = -1, left = -1, right = -1;
-
-    for (let y = gy; y < gy + gh; y += 2) {
-        let bCount = 0;
-        for (let x = gx; x < gx + gw; x += 3) {
-            const idx = (y * imgW + x) * 4;
-            const luma = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
-            if (luma > threshold) bCount++;
-        }
-        if (bCount >= MIN_BRIGHT) { top = y; break; }
-    }
-
-    for (let y = gy + gh - 1; y >= gy; y -= 2) {
-        let bCount = 0;
-        for (let x = gx; x < gx + gw; x += 3) {
-            const idx = (y * imgW + x) * 4;
-            const luma = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
-            if (luma > threshold) bCount++;
-        }
-        if (bCount >= MIN_BRIGHT) { bottom = y; break; }
-    }
-
-    for (let x = gx; x < gx + gw; x += 2) {
-        let bCount = 0;
-        for (let y = gy; y < gy + gh; y += 3) {
-            const idx = (y * imgW + x) * 4;
-            const luma = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
-            if (luma > threshold) bCount++;
-        }
-        if (bCount >= MIN_BRIGHT) { left = x; break; }
-    }
-
-    for (let x = gx + gw - 1; x >= gx; x -= 2) {
-        let bCount = 0;
-        for (let y = gy; y < gy + gh; y += 3) {
-            const idx = (y * imgW + x) * 4;
-            const luma = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
-            if (luma > threshold) bCount++;
-        }
-        if (bCount >= MIN_BRIGHT) { right = x; break; }
-    }
-
-    if (top < 0 || bottom < 0 || left < 0 || right < 0) return null;
-    if (right <= left + 20 || bottom <= top + 20) return null;
-
-    const w = right - left;
-    const h = bottom - top;
-    const side = Math.min(w, h);
-    const cx = left + w / 2;
-    const cy = top + h / 2;
-
-    return {
-        x: Math.floor(cx - side / 2),
-        y: Math.floor(cy - side / 2),
-        w: Math.floor(side),
-        h: Math.floor(side)
-    };
+    return bestQuad;
 }
 
 /**
@@ -499,4 +543,16 @@ function decodeGridMultiOrientation(sampledGrid, layout) {
         }
     }
     return null;
+}
+
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+        ProjectiveTransform,
+        rotateGrid2D,
+        sampleQuadGrid,
+        detectOpticalQuad,
+        decodeGridMultiOrientation,
+        find2DAnchorQuad,
+        calculateOtsuFromLumaArray
+    };
 }
