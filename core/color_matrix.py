@@ -73,7 +73,7 @@ class ColorMatrixLayout:
 
         # Top border: Calibration & Mode Header cells
         cal_start = s
-        cal_end = min(N - s, s + 6)
+        cal_end = min(N - s, s + 5)
         self.cal_cells = []
         for c in range(cal_start, cal_end):
             self.data_mask[0, c] = False
@@ -94,6 +94,20 @@ class ColorMatrixLayout:
         self.max_payload_bits = self.num_data_cells * self.bits_per_cell
         self.max_payload_bytes = self.max_payload_bits // 8
 
+    @property
+    def anchor_centers(self) -> List[Tuple[float, float]]:
+        """
+        Normalized canonical floating point centroids [TL, TR, BR, BL] in [0, 1]^2 space.
+        """
+        N = float(self.grid_size)
+        c = 2.5 / N
+        return [
+            (c, c),              # Top-Left
+            (1.0 - c, c),        # Top-Right
+            (1.0 - c, 1.0 - c),  # Bottom-Right
+            (c, 1.0 - c)         # Bottom-Left
+        ]
+
     def render_anchors(self, grid: np.ndarray):
         s = self.anchor_size
         N = self.grid_size
@@ -101,27 +115,29 @@ class ColorMatrixLayout:
         black = self.palette[0]
 
         # 1:1:1:1:1 Concentric Nested Square Finder Patterns in all 4 corners
-        # Top-Left: Solid White outer (5x5), Black ring (3x3), White center (1x1)
+        # Standardized White center dots (1x1 at centroid) across all 4 anchors for binarization invariance.
+
+        # Top-Left: Solid White outer (5x5), Black ring (3x3), White center dot (1x1 at (2,2))
         grid[0:s, 0:s] = white
         grid[1:s-1, 1:s-1] = black
         grid[2:s-2, 2:s-2] = white
 
-        # Top-Right: Solid White outer, Black ring, Red center dot
+        # Top-Right: Solid White outer (5x5), Black ring (3x3), White center dot (1x1 at (2, N-3))
         grid[0:s, N-s:N] = white
         grid[1:s-1, N-s+1:N-1] = black
-        grid[2:s-2, N-s+2:N-2] = self.palette[min(4, len(self.palette)-1)]
+        grid[2:s-2, N-s+2:N-2] = white
 
-        # Bottom-Right: Solid White outer, Black ring, Green center dot
+        # Bottom-Right: Solid White outer (5x5), Black ring (3x3), White center dot (1x1 at (N-3, N-3))
         grid[N-s:N, N-s:N] = white
         grid[N-s+1:N-1, N-s+1:N-1] = black
-        grid[N-s+2:N-2, N-s+2:N-2] = self.palette[min(2, len(self.palette)-1)]
+        grid[N-s+2:N-2, N-s+2:N-2] = white
 
-        # Bottom-Left: Solid White outer, Black ring, Blue/White center dot
+        # Bottom-Left: Solid White outer (5x5), Black ring (3x3), White center dot (1x1 at (N-3, 2))
         grid[N-s:N, 0:s] = white
         grid[N-s+1:N-1, 1:s-1] = black
         grid[N-s+2:N-2, 2:s-2] = white
 
-        # Calibration swatches along top border
+        # Calibration swatches along top border (coordinates (0, 5) ... (0, 9))
         if self.color_mode == MODE_3BIT_8COLOR:
             cal_indices = [0, 4, 2, 1, 7] # K, R, G, B, W
         elif self.color_mode == MODE_2BIT_4COLOR:

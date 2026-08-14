@@ -84,14 +84,15 @@ class CameraWorkerThread(QThread):
         complete = False
         self.running = True
 
-        candidate_configs = [
-            (32, MODE_1BIT_BW),
-            (64, MODE_3BIT_8COLOR),
-            (48, MODE_2BIT_4COLOR),
-            (48, MODE_3BIT_8COLOR),
-            (64, MODE_1BIT_BW)
-        ]
-        layouts = {cfg: ColorMatrixLayout(grid_size=cfg[0], color_mode=cfg[1]) for cfg in candidate_configs}
+        candidate_densities = [32, 48, 64]
+        candidate_modes = [MODE_1BIT_BW, MODE_2BIT_4COLOR, MODE_3BIT_8COLOR]
+        rotations = [0, 90, 180, 270]
+
+        layouts = {
+            (s, m): ColorMatrixLayout(grid_size=s, color_mode=m)
+            for s in candidate_densities for m in candidate_modes
+        }
+        last_successful_config = None  # (size, mode, rot)
 
         while self.running:
             ret, frame = cap.read()
@@ -104,31 +105,63 @@ class CameraWorkerThread(QThread):
                 "packets": packets_caught,
                 "crc_errors": crc_errors,
                 "progress": decoder.get_progress() if decoder else 0.0,
-                "complete": complete
+                "complete": complete,
+                "density": None,
+                "mode": None,
+                "rotation": None
             }
 
             quad = tracker.find_matrix_quad(frame)
             if quad is not None:
                 stats["locked"] = True
-                cv2.polylines(frame, [quad.astype(np.int32)], True, (0, 255, 0), 2)
-                for pt in quad:
-                    cv2.circle(frame, tuple(pt.astype(int)), 5, (0, 0, 255), -1)
 
-                warped = tracker.warp_matrix(frame, quad)
-
-                # Auto-try candidate layouts
                 decoded_packet = None
-                for cfg, layout in layouts.items():
-                    sampled_grid = tracker.sample_grid_cells(warped, grid_size=cfg[0])
-                    raw_bytes = color_grid_to_bytes(sampled_grid, layout)
+                detected_config = None
+
+                # Fast path: test last successful config first
+                if last_successful_config is not None:
+                    cached_size, cached_mode, cached_rot = last_successful_config
+                    warped = tracker.warp_matrix(frame, quad, grid_size=cached_size)
+                    sampled_grid = tracker.sample_grid_cells(warped, grid_size=cached_size)
+                    rotated = np.rot90(sampled_grid, k=-cached_rot // 90) if cached_rot != 0 else sampled_grid
+                    layout = layouts.get((cached_size, cached_mode), ColorMatrixLayout(cached_size, cached_mode))
+                    raw_bytes = color_grid_to_bytes(rotated, layout)
                     packet_data = unpack_packet(raw_bytes)
                     if packet_data is not None:
                         decoded_packet = packet_data
-                        break
+                        detected_config = last_successful_config
+
+                # Full sweep across densities, rotations, and color modes
+                if decoded_packet is None:
+                    for size in candidate_densities:
+                        warped = tracker.warp_matrix(frame, quad, grid_size=size)
+                        sampled_grid = tracker.sample_grid_cells(warped, grid_size=size)
+
+                        for rot in rotations:
+                            rotated = np.rot90(sampled_grid, k=-rot // 90) if rot != 0 else sampled_grid
+
+                            for mode in candidate_modes:
+                                layout = layouts[(size, mode)]
+                                raw_bytes = color_grid_to_bytes(rotated, layout)
+                                packet_data = unpack_packet(raw_bytes)
+                                if packet_data is not None:
+                                    decoded_packet = packet_data
+                                    detected_config = (size, mode, rot)
+                                    break
+                            if decoded_packet is not None:
+                                break
+                        if decoded_packet is not None:
+                            break
 
                 if decoded_packet is not None:
                     header, payload = decoded_packet
+                    last_successful_config = detected_config
                     packets_caught += 1
+
+                    size, mode, rot = detected_config
+                    stats["density"] = size
+                    stats["mode"] = mode
+                    stats["rotation"] = rot
 
                     if decoder is None or current_file_id != header.file_id:
                         current_file_id = header.file_id
@@ -140,7 +173,6 @@ class CameraWorkerThread(QThread):
                         complete = False
 
                     is_solved = decoder.add_droplet(header.seed, payload)
-                    stats["progress"] = decoder.get_progress()
 
                     if is_solved and not complete:
                         complete = True
@@ -159,6 +191,16 @@ class CameraWorkerThread(QThread):
                             self.file_received.emit(filename, filesize, out_path)
                 else:
                     crc_errors += 1
+
+                # Draw tracking overlays on frame for visual display
+                cv2.polylines(frame, [quad.astype(np.int32)], True, (0, 255, 0), 2)
+                for pt in quad:
+                    cv2.circle(frame, tuple(pt.astype(int)), 5, (0, 0, 255), -1)
+
+            stats["packets"] = packets_caught
+            stats["crc_errors"] = crc_errors
+            stats["progress"] = decoder.get_progress() if decoder else 0.0
+            stats["complete"] = complete
 
             self.frame_ready.emit(frame, stats)
             time.sleep(0.01)

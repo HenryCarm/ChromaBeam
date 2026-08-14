@@ -634,6 +634,1278 @@ select, input[type="range"] {
             initReceiver();
         });
     </script>
+<script id="scanner-worker-src" type="text/plain">
+/* ChromaBeam Standalone Offline Web Worker Engine */
+
+/* --- Worker Dep: fountain.js --- */
+/**
+ * ChromaBeam JavaScript Luby Transform (LT) Fountain Code Implementation
+ * Matches Python Mulberry32 PRNG, Robust Soliton distribution, and peeling/GF(2) solver.
+ */
+
+class Mulberry32 {
+    constructor(seed) {
+        this.state = seed >>> 0;
+    }
+
+    nextUint32() {
+        this.state = (this.state + 0x6D2B79F5) >>> 0;
+        let t = this.state;
+        t = Math.imul(t ^ (t >>> 15), t | 1) >>> 0;
+        t ^= (t + Math.imul(t ^ (t >>> 7), 61)) >>> 0;
+        return (t ^ (t >>> 14)) >>> 0;
+    }
+
+    nextFloat() {
+        return this.nextUint32() / 4294967296.0;
+    }
+
+    randInt(low, high) {
+        if (low >= high) return low;
+        return low + (this.nextUint32() % (high - low + 1));
+    }
+}
+
+function getRobustSolitonCDF(K, c = 0.1, delta = 0.05) {
+    if (K === 1) return [1.0];
+
+    const rho = new Float64Array(K + 1);
+    rho[1] = 1.0 / K;
+    for (let d = 2; d <= K; d++) {
+        rho[d] = 1.0 / (d * (d - 1));
+    }
+
+    const R = c * Math.log(K / delta) * Math.sqrt(K);
+    const tau = new Float64Array(K + 1);
+    const kOverR = R > 0 ? Math.round(K / R) : K;
+
+    for (let d = 1; d <= K; d++) {
+        if (d < kOverR) {
+            tau[d] = R / (d * K);
+        } else if (d === kOverR) {
+            tau[d] = (R * Math.log(R / delta)) / K;
+        } else {
+            tau[d] = 0.0;
+        }
+    }
+
+    const mu = new Float64Array(K + 1);
+    let total = 0.0;
+    for (let d = 1; d <= K; d++) {
+        mu[d] = rho[d] + tau[d];
+        total += mu[d];
+    }
+    if (total <= 0) total = 1.0;
+
+    const cdf = new Float64Array(K + 1);
+    let cum = 0.0;
+    for (let d = 1; d <= K; d++) {
+        cum += mu[d] / total;
+        cdf[d] = cum;
+    }
+    cdf[K] = 1.0;
+    return cdf;
+}
+
+function sampleDegree(prng, cdf, K) {
+    if (K <= 1) return 1;
+    const r = prng.nextFloat();
+    for (let d = 1; d <= K; d++) {
+        if (r <= cdf[d]) return d;
+    }
+    return K;
+}
+
+function getDropletIndices(seed, K) {
+    if (K <= 1) return { degree: 1, indices: [0] };
+    if (seed < K) return { degree: 1, indices: [seed] };
+
+    const prng = new Mulberry32(seed);
+    const cdf = getRobustSolitonCDF(K);
+    const degree = sampleDegree(prng, cdf, K);
+
+    const indicesSet = new Set();
+    while (indicesSet.size < degree) {
+        const idx = prng.randInt(0, K - 1);
+        indicesSet.add(idx);
+    }
+    return { degree, indices: Array.from(indicesSet).sort((a, b) => a - b) };
+}
+
+class LTEncoder {
+    constructor(uint8Data, blockSize = 256) {
+        this.rawData = uint8Data;
+        this.blockSize = blockSize;
+        this.totalSize = uint8Data.length;
+        this.K = Math.max(1, Math.ceil(this.totalSize / this.blockSize));
+
+        this.blocks = [];
+        for (let i = 0; i < this.K; i++) {
+            const chunk = new Uint8Array(this.blockSize);
+            const start = i * this.blockSize;
+            const end = Math.min(start + this.blockSize, this.totalSize);
+            chunk.set(this.rawData.subarray(start, end));
+            this.blocks.push(chunk);
+        }
+    }
+
+    generateDroplet(seed) {
+        const { degree, indices } = getDropletIndices(seed, this.K);
+        const payload = new Uint8Array(this.blockSize);
+        payload.set(this.blocks[indices[0]]);
+
+        for (let k = 1; k < indices.length; k++) {
+            const other = this.blocks[indices[k]];
+            for (let j = 0; j < this.blockSize; j++) {
+                payload[j] ^= other[j];
+            }
+        }
+        return { degree, indices, payload };
+    }
+}
+
+class LTDecoder {
+    constructor(K, blockSize, totalFilesize) {
+        this.K = K;
+        this.blockSize = blockSize;
+        this.totalFilesize = totalFilesize;
+        this.solvedBlocks = new Map(); // idx -> Uint8Array
+        this.basis = new Map();        // pivot -> { indices: Set, data: Uint8Array }
+        this.receivedCount = 0;
+        this.isComplete = false;
+    }
+
+    addDroplet(seed, payloadUint8) {
+        if (this.isComplete) return true;
+        if (payloadUint8.length !== this.blockSize) return false;
+
+        this.receivedCount++;
+        const { degree, indices } = getDropletIndices(seed, this.K);
+        let curIndices = new Set(indices);
+        let curData = new Uint8Array(payloadUint8);
+
+        // 1. Reduce with already solved singletons
+        for (const [solvedIdx, solvedData] of this.solvedBlocks) {
+            if (curIndices.has(solvedIdx)) {
+                curIndices.delete(solvedIdx);
+                for (let j = 0; j < this.blockSize; j++) curData[j] ^= solvedData[j];
+            }
+        }
+
+        if (curIndices.size === 0) return this._checkComplete();
+
+        // 2. Incremental GF(2) elimination into basis
+        while (curIndices.size > 0) {
+            let pivot = Math.min(...curIndices);
+            if (this.basis.has(pivot)) {
+                const basisRow = this.basis.get(pivot);
+                // Symmetric difference
+                const newIndices = new Set();
+                for (const elem of curIndices) if (!basisRow.indices.has(elem)) newIndices.add(elem);
+                for (const elem of basisRow.indices) if (!curIndices.has(elem)) newIndices.add(elem);
+                curIndices = newIndices;
+
+                for (let j = 0; j < this.blockSize; j++) curData[j] ^= basisRow.data[j];
+            } else {
+                this.basis.set(pivot, { indices: curIndices, data: curData });
+                break;
+            }
+        }
+
+        // 3. Back-substitute and extract newly solved singletons
+        this._reduceBasis();
+        return this._checkComplete();
+    }
+
+    _reduceBasis() {
+        let changed = true;
+        while (changed) {
+            changed = false;
+            for (const [pivot, row] of Array.from(this.basis.entries())) {
+                for (const solvedIdx of Array.from(row.indices)) {
+                    if (this.solvedBlocks.has(solvedIdx)) {
+                        row.indices.delete(solvedIdx);
+                        const solvedData = this.solvedBlocks.get(solvedIdx);
+                        for (let j = 0; j < this.blockSize; j++) row.data[j] ^= solvedData[j];
+                        changed = true;
+                    }
+                }
+
+                if (row.indices.size === 0) {
+                    this.basis.delete(pivot);
+                } else if (row.indices.size === 1) {
+                    const singleIdx = row.indices.values().next().value;
+                    if (!this.solvedBlocks.has(singleIdx)) {
+                        this.solvedBlocks.set(singleIdx, new Uint8Array(row.data));
+                        this.basis.delete(pivot);
+                        changed = true;
+                    }
+                }
+            }
+        }
+    }
+
+    _checkComplete() {
+        if (this.solvedBlocks.size >= this.K) {
+            this.isComplete = true;
+            return true;
+        }
+        return false;
+    }
+
+    getProgress() {
+        return this.solvedBlocks.size / this.K;
+    }
+
+    reconstructData() {
+        if (this.solvedBlocks.size < this.K) return null;
+        const out = new Uint8Array(this.K * this.blockSize);
+        for (let i = 0; i < this.K; i++) {
+            if (!this.solvedBlocks.has(i)) return null;
+            out.set(this.solvedBlocks.get(i), i * this.blockSize);
+        }
+        return out.subarray(0, this.totalFilesize);
+    }
+}
+
+
+/* --- Worker Dep: protocol.js --- */
+/**
+ * ChromaBeam JavaScript Protocol Serializer & CRC32
+ */
+
+const MAGIC_INT = 0x4342; // 'CB'
+const HEADER_SIZE = 12;
+
+// Standard CRC32 table
+const CRC_TABLE = new Uint32Array(256);
+for (let i = 0; i < 256; i++) {
+    let c = i;
+    for (let k = 0; k < 8; k++) {
+        c = ((c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1));
+    }
+    CRC_TABLE[i] = c >>> 0;
+}
+
+function computeCRC32(uint8Array) {
+    let crc = 0xFFFFFFFF;
+    for (let i = 0; i < uint8Array.length; i++) {
+        crc = (crc >>> 8) ^ CRC_TABLE[(crc ^ uint8Array[i]) & 0xFF];
+    }
+    return (crc ^ 0xFFFFFFFF) >>> 0;
+}
+
+function packPacket(fileId, totalBlocks, blockSize, seed, payloadUint8) {
+    const packet = new Uint8Array(HEADER_SIZE + blockSize + 4);
+    const view = new DataView(packet.buffer);
+
+    view.setUint16(0, MAGIC_INT, false);
+    view.setUint16(2, fileId & 0xFFFF, false);
+    view.setUint16(4, totalBlocks & 0xFFFF, false);
+    view.setUint16(6, blockSize & 0xFFFF, false);
+    view.setUint32(8, seed >>> 0, false);
+
+    packet.set(payloadUint8, HEADER_SIZE);
+
+    const crc = computeCRC32(payloadUint8);
+    view.setUint32(HEADER_SIZE + blockSize, crc, false);
+
+    return packet;
+}
+
+function unpackPacket(rawUint8) {
+    if (rawUint8.length < HEADER_SIZE + 4) return null;
+    const view = new DataView(rawUint8.buffer, rawUint8.byteOffset, rawUint8.byteLength);
+
+    const magic = view.getUint16(0, false);
+    if (magic !== MAGIC_INT) return null;
+
+    const fileId = view.getUint16(2, false);
+    const totalBlocks = view.getUint16(4, false);
+    const blockSize = view.getUint16(6, false);
+    const seed = view.getUint32(8, false);
+
+    if (rawUint8.length < HEADER_SIZE + blockSize + 4) return null;
+
+    const payload = rawUint8.subarray(HEADER_SIZE, HEADER_SIZE + blockSize);
+    const expectedCrc = view.getUint32(HEADER_SIZE + blockSize, false);
+
+    const actualCrc = computeCRC32(payload);
+    if (actualCrc !== expectedCrc) return null; // Corrupted frame
+
+    return {
+        header: { fileId, totalBlocks, blockSize, seed },
+        payload
+    };
+}
+
+function packFileMetadata(filename, filesize, mimeType = "application/octet-stream") {
+    const enc = new TextEncoder();
+    const nameBytes = enc.encode(filename).subarray(0, 255);
+    const mimeBytes = enc.encode(mimeType).subarray(0, 64);
+
+    const out = new Uint8Array(4 + 1 + nameBytes.length + 1 + mimeBytes.length);
+    const view = new DataView(out.buffer);
+
+    view.setUint32(0, filesize, false);
+    out[4] = nameBytes.length;
+    out.set(nameBytes, 5);
+    const offset = 5 + nameBytes.length;
+    out[offset] = mimeBytes.length;
+    out.set(mimeBytes, offset + 1);
+
+    return out;
+}
+
+function unpackFileMetadata(uint8Array) {
+    if (uint8Array.length < 6) return null;
+    const view = new DataView(uint8Array.buffer, uint8Array.byteOffset, uint8Array.byteLength);
+    const filesize = view.getUint32(0, false);
+    const nameLen = uint8Array[4];
+    if (uint8Array.length < 5 + nameLen + 1) return null;
+
+    const dec = new TextDecoder();
+    const filename = dec.decode(uint8Array.subarray(5, 5 + nameLen));
+    const offset = 5 + nameLen;
+    const mimeLen = uint8Array[offset];
+    if (uint8Array.length < offset + 1 + mimeLen) return null;
+
+    const mimeType = dec.decode(uint8Array.subarray(offset + 1, offset + 1 + mimeLen));
+    const metadataHeaderLen = offset + 1 + mimeLen;
+    return { filename, filesize, mimeType, metadataHeaderLen };
+}
+
+
+/* --- Worker Dep: matrix.js --- */
+/**
+ * ChromaBeam Multi-Mode Optical Matrix Engine (JS)
+ */
+
+const PALETTES = {
+    0: [ [0, 0, 0], [255, 255, 255] ], // 1-bit B&W
+    1: [ [0, 0, 0], [255, 50, 50], [50, 255, 50], [255, 255, 255] ], // 2-bit 4-Color
+    2: [ // 3-bit 8-Color RGB
+        [0, 0, 0], [0, 0, 255], [0, 255, 0], [0, 255, 255],
+        [255, 0, 0], [255, 0, 255], [255, 255, 0], [255, 255, 255]
+    ]
+};
+
+const JS_ANCHOR_SIZE = 5;
+
+class JSColorMatrixLayout {
+    constructor(gridSize = 48, colorMode = 2) {
+        this.gridSize = gridSize;
+        this.colorMode = colorMode;
+        this.anchorSize = JS_ANCHOR_SIZE;
+        this.palette = PALETTES[colorMode] || PALETTES[2];
+        this.bitsPerCell = (colorMode === 0) ? 1 : (colorMode === 1 ? 2 : 3);
+
+        this.dataCoords = [];
+        this.calCells = [];
+        this.timingCells = [];
+
+        const s = this.anchorSize;
+        const N = this.gridSize;
+
+        // 1. Calibration cells (Top row: s to s + 5)
+        const calEnd = Math.min(N - s, s + 5);
+        for (let c = s; c < calEnd; c++) {
+            this.calCells.push({ r: 0, c });
+        }
+
+        // 2. Timing tracks
+        for (let c = calEnd; c < N - s; c++) {
+            this.timingCells.push({ r: 0, c, colorIdx: (c % 2) ? (this.palette.length - 1) : 0 });
+        }
+        for (let c = s; c < N - s; c++) {
+            this.timingCells.push({ r: N - 1, c, colorIdx: (c % 2) ? (this.palette.length - 1) : 0 });
+        }
+
+        // 3. Data cells
+        for (let r = 0; r < N; r++) {
+            for (let c = 0; c < N; c++) {
+                const inTL = (r < s && c < s);
+                const inTR = (r < s && c >= N - s);
+                const inBL = (r >= N - s && c < s);
+                const inBR = (r >= N - s && c >= N - s);
+                const inTopBorder = (r === 0 && c >= s && c < N - s);
+                const inBotBorder = (r === N - 1 && c >= s && c < N - s);
+
+                if (!inTL && !inTR && !inBL && !inBR && !inTopBorder && !inBotBorder) {
+                    this.dataCoords.push({ r, c });
+                }
+            }
+        }
+
+        this.numDataCells = this.dataCoords.length;
+        this.maxPayloadBits = this.numDataCells * this.bitsPerCell;
+        this.maxPayloadBytes = Math.floor(this.maxPayloadBits / 8);
+    }
+
+    get anchorCenters() {
+        const N = this.gridSize;
+        const c = 2.5 / N;
+        return [
+            { x: c, y: c },              // Top-Left
+            { x: 1 - c, y: c },          // Top-Right
+            { x: 1 - c, y: 1 - c },      // Bottom-Right
+            { x: c, y: 1 - c }           // Bottom-Left
+        ];
+    }
+
+    renderAnchors(grid2D) {
+        const s = this.anchorSize;
+        const N = this.gridSize;
+        const white = this.palette.length - 1;
+        const black = 0;
+
+        // 1:1:1:1:1 Concentric square anchors
+        // Standardized White center dots (1x1 at centroid) across all 4 corners for binarization invariance.
+
+        // TL (Center dot at (2, 2))
+        for (let r = 0; r < s; r++) for (let c = 0; c < s; c++) grid2D[r][c] = white;
+        for (let r = 1; r < s - 1; r++) for (let c = 1; c < s - 1; c++) grid2D[r][c] = black;
+        grid2D[2][2] = white;
+
+        // TR (Center dot at (2, N-3))
+        for (let r = 0; r < s; r++) for (let c = N - s; c < N; c++) grid2D[r][c] = white;
+        for (let r = 1; r < s - 1; r++) for (let c = N - s + 1; c < N - 1; c++) grid2D[r][c] = black;
+        grid2D[2][N - 3] = white;
+
+        // BR (Center dot at (N-3, N-3))
+        for (let r = N - s; r < N; r++) for (let c = N - s; c < N; c++) grid2D[r][c] = white;
+        for (let r = N - s + 1; r < N - 1; r++) for (let c = N - s + 1; c < N - 1; c++) grid2D[r][c] = black;
+        grid2D[N - 3][N - 3] = white;
+
+        // BL (Center dot at (N-3, 2))
+        for (let r = N - s; r < N; r++) for (let c = 0; c < s; c++) grid2D[r][c] = white;
+        for (let r = N - s + 1; r < N - 1; r++) for (let c = 1; c < s - 1; c++) grid2D[r][c] = black;
+        grid2D[N - 3][2] = white;
+
+        // Calibration swatches
+        let calIdxs = (this.colorMode === 2) ? [0, 4, 2, 1, 7] : ((this.colorMode === 1) ? [0, 1, 2, 3] : [0, 1, 0, 1]);
+        for (let i = 0; i < Math.min(this.calCells.length, calIdxs.length); i++) {
+            const { r, c } = this.calCells[i];
+            grid2D[r][c] = Math.min(calIdxs[i], this.palette.length - 1);
+        }
+
+        // Timing tracks
+        for (const { r, c, colorIdx } of this.timingCells) {
+            grid2D[r][c] = colorIdx;
+        }
+    }
+}
+
+function bytesToGridIndices(uint8Data, layout) {
+    const N = layout.gridSize;
+    const grid2D = Array.from({ length: N }, () => new Uint8Array(N));
+    layout.renderAnchors(grid2D);
+
+    const bits = [];
+    for (let i = 0; i < uint8Data.length; i++) {
+        const b = uint8Data[i];
+        for (let k = 7; k >= 0; k--) bits.push((b >> k) & 1);
+    }
+
+    const bpc = layout.bitsPerCell;
+    while (bits.length % bpc !== 0) bits.push(0);
+
+    const numChunks = Math.floor(bits.length / bpc);
+    const numToDraw = Math.min(numChunks, layout.numDataCells);
+
+    for (let i = 0; i < numToDraw; i++) {
+        let colorIdx = 0;
+        if (bpc === 1) {
+            colorIdx = bits[i];
+        } else if (bpc === 2) {
+            colorIdx = (bits[i * 2] << 1) | bits[i * 2 + 1];
+        } else {
+            colorIdx = (bits[i * 3] << 2) | (bits[i * 3 + 1] << 1) | bits[i * 3 + 2];
+        }
+        const { r, c } = layout.dataCoords[i];
+        grid2D[r][c] = colorIdx;
+    }
+
+    return grid2D;
+}
+
+function gridIndicesToBytes(grid2D, layout) {
+    const bits = [];
+    const bpc = layout.bitsPerCell;
+
+    for (let i = 0; i < layout.numDataCells; i++) {
+        const { r, c } = layout.dataCoords[i];
+        const colorIdx = grid2D[r][c];
+        if (bpc === 1) {
+            bits.push(colorIdx & 1);
+        } else if (bpc === 2) {
+            bits.push((colorIdx >> 1) & 1);
+            bits.push(colorIdx & 1);
+        } else {
+            bits.push((colorIdx >> 2) & 1);
+            bits.push((colorIdx >> 1) & 1);
+            bits.push(colorIdx & 1);
+        }
+    }
+
+    const numBytes = Math.floor(bits.length / 8);
+    const out = new Uint8Array(numBytes);
+    for (let i = 0; i < numBytes; i++) {
+        let b = 0;
+        for (let k = 0; k < 8; k++) {
+            b = (b << 1) | bits[i * 8 + k];
+        }
+        out[i] = b;
+    }
+    return out;
+}
+
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+        PALETTES,
+        JS_ANCHOR_SIZE,
+        JSColorMatrixLayout,
+        bytesToGridIndices,
+        gridIndicesToBytes
+    };
+}
+
+
+/* --- Worker Dep: vision_engine.js --- */
+/**
+ * ChromaBeam Pure JavaScript 3D Perspective & Computer Vision Engine v2
+ * 
+ * Features:
+ * - 4-Point Projective Transform (Homography)
+ * - 360° 4-Way Rotation Invariance (0°, 90°, 180°, 270°)
+ * - Multi-Thresholding Strategy (Otsu, Adaptive Median, Contrast-Boosted)
+ * - Dynamic Lighting & Glare Compensation
+ * - Full Diagnostic Telemetry Export
+ * - Real-Time Debug Binarizer Renderer
+ */
+
+class ProjectiveTransform {
+    constructor(p0, p1, p2, p3) {
+        // Maps unit square (0,0)-(1,0)-(1,1)-(0,1) to quad (p0, p1, p2, p3)
+        // p0: TL, p1: TR, p2: BR, p3: BL
+        const x0 = p0.x, y0 = p0.y;
+        const x1 = p1.x, y1 = p1.y;
+        const x2 = p2.x, y2 = p2.y;
+        const x3 = p3.x, y3 = p3.y;
+
+        const dx1 = x1 - x2;
+        const dx2 = x3 - x2;
+        const sx = x0 - x1 + x2 - x3;
+        const dy1 = y1 - y2;
+        const dy2 = y3 - y2;
+        const sy = y0 - y1 + y2 - y3;
+
+        if (Math.abs(sx) < 1e-6 && Math.abs(sy) < 1e-6) {
+            // Affine transform
+            this.a = x1 - x0;
+            this.b = x3 - x0;
+            this.c = x0;
+            this.d = y1 - y0;
+            this.e = y3 - y0;
+            this.f = y0;
+            this.g = 0;
+            this.h = 0;
+        } else {
+            // Perspective transform
+            const det = dx1 * dy2 - dx2 * dy1;
+            if (Math.abs(det) < 1e-7) {
+                this.a = x1 - x0; this.b = x3 - x0; this.c = x0;
+                this.d = y1 - y0; this.e = y3 - y0; this.f = y0;
+                this.g = 0; this.h = 0;
+            } else {
+                this.g = (sx * dy2 - dx2 * sy) / det;
+                this.h = (dx1 * sy - sx * dy1) / det;
+                this.a = x1 - x0 + this.g * x1;
+                this.b = x3 - x0 + this.h * x3;
+                this.c = x0;
+                this.d = y1 - y0 + this.g * y1;
+                this.e = y3 - y0 + this.h * y3;
+                this.f = y0;
+            }
+        }
+    }
+
+    transform(u, v) {
+        const W = this.g * u + this.h * v + 1.0;
+        if (Math.abs(W) < 1e-7) return { x: this.c, y: this.f };
+        return {
+            x: (this.a * u + this.b * v + this.c) / W,
+            y: (this.d * u + this.e * v + this.f) / W
+        };
+    }
+}
+
+/**
+ * Rotates a 2D array grid by 0, 90, 180, or 270 degrees clockwise.
+ */
+function rotateGrid2D(grid2D, rotationSteps) {
+    const N = grid2D.length;
+    const rot = (rotationSteps % 4 + 4) % 4;
+    if (rot === 0) return grid2D;
+
+    const out = Array.from({ length: N }, () => new Uint8Array(N));
+    for (let r = 0; r < N; r++) {
+        for (let c = 0; c < N; c++) {
+            if (rot === 1) {
+                out[c][N - 1 - r] = grid2D[r][c]; // 90 deg clockwise
+            } else if (rot === 2) {
+                out[N - 1 - r][N - 1 - c] = grid2D[r][c]; // 180 deg upside-down
+            } else if (rot === 3) {
+                out[N - 1 - c][r] = grid2D[r][c]; // 270 deg clockwise
+            }
+        }
+    }
+    return out;
+}
+
+/**
+ * Samples a grid from an arbitrary 4-point quadrilateral using 3D perspective mapping.
+ * Uses 3x3 multi-pixel bilinear subpixel averaging to eliminate moire and camera noise.
+ */
+function sampleQuadGrid(imgData, w, h, quad, layout, customThreshold = null) {
+    const N = layout.gridSize;
+    const colorMode = layout.colorMode;
+    const palette = layout.palette;
+    const data = imgData.data;
+
+    const transform = new ProjectiveTransform(quad[0], quad[1], quad[2], quad[3]);
+    const grid2D = Array.from({ length: N }, () => new Uint8Array(N));
+
+    let minLuma = 255;
+    let maxLuma = 0;
+    let lumaThreshold = 128;
+
+    // Fast sampling pass to compute luminance distribution & Otsu threshold
+    if (colorMode === 0) {
+        if (customThreshold !== null) {
+            lumaThreshold = customThreshold;
+        } else {
+            const samples = [];
+            const step = Math.max(1, Math.floor(N / 8));
+            for (let r = 0; r < N; r += step) {
+                for (let c = 0; c < N; c += step) {
+                    const pt = transform.transform((c + 0.5) / N, (r + 0.5) / N);
+                    const px = Math.floor(pt.x);
+                    const py = Math.floor(pt.y);
+                    if (px >= 0 && px < w && py >= 0 && py < h) {
+                        const idx = (py * w + px) * 4;
+                        const luma = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
+                        samples.push(luma);
+                        if (luma < minLuma) minLuma = luma;
+                        if (luma > maxLuma) maxLuma = luma;
+                    }
+                }
+            }
+            if (samples.length > 10) {
+                lumaThreshold = calculateOtsuFromLumaArray(samples);
+            }
+        }
+    }
+
+    // Main cell sampling pass
+    for (let r = 0; r < N; r++) {
+        const v = (r + 0.5) / N;
+        for (let c = 0; c < N; c++) {
+            const u = (c + 0.5) / N;
+            
+            const pt = transform.transform(u, v);
+            const cx = pt.x;
+            const cy = pt.y;
+
+            // Approximate subpixel sampling radius
+            const ptRight = transform.transform((c + 1.0) / N, v);
+            const cellRadius = Math.max(1.0, Math.hypot(ptRight.x - cx, ptRight.y - cy) * 0.22);
+
+            let avgR = 0, avgG = 0, avgB = 0, count = 0;
+            const offsets = [-cellRadius, 0, cellRadius];
+
+            for (const dy of offsets) {
+                for (const dx of offsets) {
+                    const px = Math.floor(cx + dx);
+                    const py = Math.floor(cy + dy);
+                    if (px >= 0 && px < w && py >= 0 && py < h) {
+                        const idx = (py * w + px) * 4;
+                        avgR += data[idx];
+                        avgG += data[idx + 1];
+                        avgB += data[idx + 2];
+                        count++;
+                    }
+                }
+            }
+
+            if (count > 0) {
+                avgR /= count;
+                avgG /= count;
+                avgB /= count;
+            }
+
+            if (colorMode === 0) {
+                const luma = 0.299 * avgR + 0.587 * avgG + 0.114 * avgB;
+                grid2D[r][c] = (luma > lumaThreshold) ? 1 : 0;
+            } else {
+                let bestIdx = 0;
+                let minDist = Infinity;
+                for (let k = 0; k < palette.length; k++) {
+                    const [pr, pg, pb] = palette[k];
+                    const dist = (avgR - pr) ** 2 + (avgG - pg) ** 2 + (avgB - pb) ** 2;
+                    if (dist < minDist) {
+                        minDist = dist;
+                        bestIdx = k;
+                    }
+                }
+                grid2D[r][c] = bestIdx;
+            }
+        }
+    }
+
+    return {
+        grid2D,
+        lumaThreshold,
+        minLuma: Math.round(minLuma),
+        maxLuma: Math.round(maxLuma),
+        contrast: Math.round(maxLuma - minLuma)
+    };
+}
+
+function calculateOtsuFromLumaArray(samples) {
+    const histogram = new Uint32Array(256);
+    for (let i = 0; i < samples.length; i++) {
+        histogram[Math.min(255, Math.max(0, Math.floor(samples[i])))]++;
+    }
+
+    let sumTotal = 0;
+    for (let i = 0; i < 256; i++) sumTotal += i * histogram[i];
+
+    let sumBg = 0, weightBg = 0, maxVariance = 0, threshold = 128;
+    const totalCount = samples.length;
+
+    for (let t = 0; t < 256; t++) {
+        weightBg += histogram[t];
+        if (weightBg === 0) continue;
+        const weightFg = totalCount - weightBg;
+        if (weightFg === 0) break;
+
+        sumBg += t * histogram[t];
+        const meanBg = sumBg / weightBg;
+        const meanFg = (sumTotal - sumBg) / weightFg;
+        const variance = weightBg * weightFg * (meanBg - meanFg) ** 2;
+
+        if (variance > maxVariance) {
+            maxVariance = variance;
+            threshold = t;
+        }
+    }
+
+    return threshold;
+}
+
+/**
+ * Universal Quad & Finder Pattern Detector.
+ * Returns { quad, method, confidence }
+ */
+function detectOpticalQuad(imgData, w, h, guideRect) {
+    const data = imgData.data;
+
+    // 1. First Pass: Anchor Pattern Matching (1:1:1:1:1 concentric squares)
+    const anchorClusters = findAnchorClusters(data, w, h);
+    if (anchorClusters && anchorClusters.length === 4) {
+        const orderedAnchors = orderQuadPointsClockwise(anchorClusters);
+        const cx = (orderedAnchors[0].x + orderedAnchors[1].x + orderedAnchors[2].x + orderedAnchors[3].x) / 4;
+        const cy = (orderedAnchors[0].y + orderedAnchors[1].y + orderedAnchors[2].y + orderedAnchors[3].y) / 4;
+        const scale = 1.08;
+
+        const quad = orderedAnchors.map(pt => ({
+            x: Math.max(0, Math.min(w - 1, cx + (pt.x - cx) * scale)),
+            y: Math.max(0, Math.min(h - 1, cy + (pt.y - cy) * scale))
+        }));
+
+        return { quad, method: '4-Anchor Finder', confidence: 0.95 };
+    }
+
+    // 2. Second Pass: Adaptive dynamic bounds inside guide region
+    const gx = guideRect ? guideRect.x : Math.floor(w * 0.1);
+    const gy = guideRect ? guideRect.y : Math.floor(h * 0.1);
+    const gw = guideRect ? guideRect.w : Math.floor(w * 0.8);
+    const gh = guideRect ? guideRect.h : Math.floor(h * 0.8);
+
+    const bounds = detectAdaptiveContrastBounds(data, w, h, gx, gy, gw, gh);
+    if (bounds) {
+        const quad = [
+            { x: bounds.x, y: bounds.y },
+            { x: bounds.x + bounds.w, y: bounds.y },
+            { x: bounds.x + bounds.w, y: bounds.y + bounds.h },
+            { x: bounds.x, y: bounds.y + bounds.h }
+        ];
+        return { quad, method: 'Adaptive Boundary', confidence: 0.80 };
+    }
+
+    // 3. Fallback: Guide Region Quad
+    const defaultQuad = [
+        { x: gx, y: gy },
+        { x: gx + gw, y: gy },
+        { x: gx + gw, y: gy + gh },
+        { x: gx, y: gy + gh }
+    ];
+    return { quad: defaultQuad, method: 'Viewfinder ROI', confidence: 0.50 };
+}
+
+function findAnchorClusters(data, w, h) {
+    const candidates = [];
+    const stepY = Math.max(4, Math.floor(h / 90));
+
+    // Dynamic contrast determination
+    let minL = 255, maxL = 0;
+    for (let i = 0; i < Math.min(data.length, 20000); i += 16) {
+        const l = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+        if (l < minL) minL = l;
+        if (l > maxL) maxL = l;
+    }
+    const midLuma = (minL + maxL) * 0.5;
+    if (maxL - minL < 30) return null; // Too low contrast to distinguish anchors
+
+    for (let y = 10; y < h - 10; y += stepY) {
+        let state = 0;
+        let counts = [0, 0, 0, 0, 0];
+        let lastColor = 0;
+
+        for (let x = 10; x < w - 10; x += 2) {
+            const idx = (y * w + x) * 4;
+            const luma = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
+            const color = (luma > midLuma) ? 1 : 0;
+
+            if (x === 10) {
+                lastColor = color;
+                counts[0] = 1;
+                state = 0;
+                continue;
+            }
+
+            if (color === lastColor) {
+                counts[state]++;
+            } else {
+                if (state < 4) {
+                    state++;
+                    counts[state] = 1;
+                } else {
+                    if (counts[0] > 1 && counts[1] > 1 && counts[2] > 1 && counts[3] > 1 && counts[4] > 1) {
+                        const total = counts[0] + counts[1] + counts[2] + counts[3] + counts[4];
+                        const avg = total / 5.0;
+                        const maxDiff = Math.max(...counts.map(c => Math.abs(c - avg)));
+                        if (maxDiff < avg * 1.8 && total >= 12 && total < w * 0.45) {
+                            const centerX = x - (counts[4] + counts[3] + counts[2] / 2);
+                            candidates.push({ x: centerX, y });
+                        }
+                    }
+                    counts[0] = counts[2];
+                    counts[1] = counts[3];
+                    counts[2] = counts[4];
+                    counts[3] = 1;
+                    counts[4] = 0;
+                    state = 3;
+                }
+                lastColor = color;
+            }
+        }
+    }
+
+    if (candidates.length < 4) return null;
+
+    const clusters = [];
+    const radius = Math.min(w, h) * 0.09;
+
+    for (const pt of candidates) {
+        let found = false;
+        for (const cl of clusters) {
+            if (Math.hypot(cl.x - pt.x, cl.y - pt.y) < radius) {
+                cl.x = (cl.x * cl.count + pt.x) / (cl.count + 1);
+                cl.y = (cl.y * cl.count + pt.y) / (cl.count + 1);
+                cl.count++;
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            clusters.push({ x: pt.x, y: pt.y, count: 1 });
+        }
+    }
+
+    clusters.sort((a, b) => b.count - a.count);
+    if (clusters.length >= 4) {
+        const top4 = clusters.slice(0, 4);
+        const minDistance = Math.min(w, h) * 0.12;
+        for (let i = 0; i < 4; i++) {
+            for (let j = i + 1; j < 4; j++) {
+                if (Math.hypot(top4[i].x - top4[j].x, top4[i].y - top4[j].y) < minDistance) {
+                    return null;
+                }
+            }
+        }
+        return top4;
+    }
+
+    return null;
+}
+
+function orderQuadPointsClockwise(pts) {
+    const cx = (pts[0].x + pts[1].x + pts[2].x + pts[3].x) / 4;
+    const cy = (pts[0].y + pts[1].y + pts[2].y + pts[3].y) / 4;
+
+    const sorted = pts.slice().sort((a, b) => {
+        const angleA = Math.atan2(a.y - cy, a.x - cx);
+        const angleB = Math.atan2(b.y - cy, b.x - cx);
+        return angleA - angleB;
+    });
+
+    let tlIdx = 0;
+    let minSum = Infinity;
+    for (let i = 0; i < 4; i++) {
+        const sum = sorted[i].x + sorted[i].y;
+        if (sum < minSum) {
+            minSum = sum;
+            tlIdx = i;
+        }
+    }
+
+    return [
+        sorted[tlIdx],
+        sorted[(tlIdx + 1) % 4],
+        sorted[(tlIdx + 2) % 4],
+        sorted[(tlIdx + 3) % 4]
+    ];
+}
+
+function detectAdaptiveContrastBounds(data, imgW, imgH, gx, gy, gw, gh) {
+    // Dynamic sample of luma in guide region
+    let minLuma = 255, maxLuma = 0;
+    for (let y = gy; y < gy + gh; y += 8) {
+        for (let x = gx; x < gx + gw; x += 8) {
+            const idx = (y * imgW + x) * 4;
+            const l = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
+            if (l < minLuma) minLuma = l;
+            if (l > maxLuma) maxLuma = l;
+        }
+    }
+
+    const contrast = maxLuma - minLuma;
+    if (contrast < 35) return null; // Insufficient lighting contrast
+
+    const threshold = minLuma + contrast * 0.45;
+    const MIN_BRIGHT = 2;
+    let top = -1, bottom = -1, left = -1, right = -1;
+
+    for (let y = gy; y < gy + gh; y += 2) {
+        let bCount = 0;
+        for (let x = gx; x < gx + gw; x += 3) {
+            const idx = (y * imgW + x) * 4;
+            const luma = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
+            if (luma > threshold) bCount++;
+        }
+        if (bCount >= MIN_BRIGHT) { top = y; break; }
+    }
+
+    for (let y = gy + gh - 1; y >= gy; y -= 2) {
+        let bCount = 0;
+        for (let x = gx; x < gx + gw; x += 3) {
+            const idx = (y * imgW + x) * 4;
+            const luma = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
+            if (luma > threshold) bCount++;
+        }
+        if (bCount >= MIN_BRIGHT) { bottom = y; break; }
+    }
+
+    for (let x = gx; x < gx + gw; x += 2) {
+        let bCount = 0;
+        for (let y = gy; y < gy + gh; y += 3) {
+            const idx = (y * imgW + x) * 4;
+            const luma = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
+            if (luma > threshold) bCount++;
+        }
+        if (bCount >= MIN_BRIGHT) { left = x; break; }
+    }
+
+    for (let x = gx + gw - 1; x >= gx; x -= 2) {
+        let bCount = 0;
+        for (let y = gy; y < gy + gh; y += 3) {
+            const idx = (y * imgW + x) * 4;
+            const luma = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
+            if (luma > threshold) bCount++;
+        }
+        if (bCount >= MIN_BRIGHT) { right = x; break; }
+    }
+
+    if (top < 0 || bottom < 0 || left < 0 || right < 0) return null;
+    if (right <= left + 20 || bottom <= top + 20) return null;
+
+    const w = right - left;
+    const h = bottom - top;
+    const side = Math.min(w, h);
+    const cx = left + w / 2;
+    const cy = top + h / 2;
+
+    return {
+        x: Math.floor(cx - side / 2),
+        y: Math.floor(cy - side / 2),
+        w: Math.floor(side),
+        h: Math.floor(side)
+    };
+}
+
+/**
+ * Fast Multi-Orientation Decoder.
+ * Tries 0°, 90°, 180°, 270° rotations of the sampled grid.
+ */
+function decodeGridMultiOrientation(sampledGrid, layout) {
+    for (let rot = 0; rot < 4; rot++) {
+        const rotGrid = (rot === 0) ? sampledGrid : rotateGrid2D(sampledGrid, rot);
+        const rawBytes = gridIndicesToBytes(rotGrid, layout);
+        const packet = unpackPacket(rawBytes);
+        if (packet) {
+            return {
+                packet,
+                rotationDeg: rot * 90,
+                rotationSteps: rot
+            };
+        }
+    }
+    return null;
+}
+
+
+/* --- scanner_worker.js --- */
+/**
+ * ChromaBeam Background Web Worker Decoder & Vision Engine v2
+ * Provides real-time diagnostic telemetry, multi-threshold decoding,
+ * and high-precision fountain solver progress reporting.
+ */
+
+if (typeof importScripts === 'function' && typeof LTDecoder === 'undefined') {
+    try {
+        importScripts('fountain.js', 'protocol.js', 'matrix.js', 'vision_engine.js');
+    } catch (e) {
+        console.error("[Worker] importScripts failed:", e);
+    }
+}
+
+const CANDIDATE_CONFIGS = [
+    { grid: 32, mode: 0, label: '32×32 B&W (Potato)' },
+    { grid: 48, mode: 0, label: '48×48 B&W' },
+    { grid: 64, mode: 0, label: '64×64 B&W' },
+    { grid: 32, mode: 1, label: '32×32 4-Color' },
+    { grid: 48, mode: 1, label: '48×48 4-Color' },
+    { grid: 48, mode: 2, label: '48×48 8-Color' },
+    { grid: 64, mode: 2, label: '64×64 8-Color' },
+];
+
+const CACHED_LAYOUTS = {};
+for (const cfg of CANDIDATE_CONFIGS) {
+    CACHED_LAYOUTS[`${cfg.grid}_${cfg.mode}`] = new JSColorMatrixLayout(cfg.grid, cfg.mode);
+}
+
+let workerDecoder = null;
+let workerCurrentFileId = null;
+let workerPacketsCaught = 0;
+let workerCRCErrors = 0;
+let workerIsComplete = false;
+let workerLockedConfig = null;
+
+function resetWorkerSession() {
+    workerDecoder = null;
+    workerCurrentFileId = null;
+    workerPacketsCaught = 0;
+    workerCRCErrors = 0;
+    workerIsComplete = false;
+    workerLockedConfig = null;
+}
+
+self.onmessage = function(e) {
+    const startTime = performance.now();
+    const msg = e.data;
+
+    if (msg.type === 'reset') {
+        resetWorkerSession();
+        self.postMessage({ type: 'resetAck' });
+        return;
+    }
+
+    if (msg.type === 'processFrame') {
+        try {
+            const { width, height, guideRect } = msg;
+            const imgData = {
+                data: new Uint8ClampedArray(msg.buffer),
+                width,
+                height
+            };
+
+            if (workerIsComplete) {
+                self.postMessage({
+                    type: 'frameResult',
+                    locked: false,
+                    caught: workerPacketsCaught,
+                    drops: workerCRCErrors,
+                    progress: 1.0,
+                    progressPctFormatted: "100.0000%",
+                    isComplete: true,
+                    latencyMs: (performance.now() - startTime).toFixed(1)
+                });
+                return;
+            }
+
+            // 1. Detect 4-point quadrilateral in 3D camera space
+            const detectRes = detectOpticalQuad(imgData, width, height, guideRect);
+            const quad = detectRes.quad;
+            const detectMethod = detectRes.method;
+
+            let decodedResult = null;
+            let matchedConfig = null;
+            let lastLumaMetrics = null;
+
+            if (quad) {
+                const configsToTest = workerLockedConfig ? [workerLockedConfig] : CANDIDATE_CONFIGS;
+
+                for (const cfg of configsToTest) {
+                    const layout = CACHED_LAYOUTS[`${cfg.grid}_${cfg.mode}`];
+                    
+                    // Primary sample pass
+                    const sampleRes = sampleQuadGrid(imgData, width, height, quad, layout);
+                    lastLumaMetrics = {
+                        lumaThreshold: sampleRes.lumaThreshold,
+                        minLuma: sampleRes.minLuma,
+                        maxLuma: sampleRes.maxLuma,
+                        contrast: sampleRes.contrast
+                    };
+
+                    let res = decodeGridMultiOrientation(sampleRes.grid2D, layout);
+
+                    // Multi-threshold fallback for B&W mode (glare compensation)
+                    if (!res && cfg.mode === 0 && sampleRes.contrast > 30) {
+                        const altThresholds = [sampleRes.lumaThreshold - 15, sampleRes.lumaThreshold + 15];
+                        for (const altT of altThresholds) {
+                            if (altT > 20 && altT < 240) {
+                                const altSample = sampleQuadGrid(imgData, width, height, quad, layout, altT);
+                                res = decodeGridMultiOrientation(altSample.grid2D, layout);
+                                if (res) break;
+                            }
+                        }
+                    }
+
+                    if (res) {
+                        decodedResult = res;
+                        matchedConfig = cfg;
+                        workerLockedConfig = cfg;
+                        break;
+                    }
+                }
+
+                if (!decodedResult && workerLockedConfig) {
+                    workerLockedConfig = null; // Lost lock, resume sweep next frame
+                }
+            }
+
+            let fileResult = null;
+            const latencyMs = (performance.now() - startTime).toFixed(1);
+
+            if (decodedResult) {
+                workerPacketsCaught++;
+                const { packet, rotationDeg } = decodedResult;
+                const { header, payload } = packet;
+
+                if (!workerDecoder || workerCurrentFileId !== header.fileId) {
+                    workerCurrentFileId = header.fileId;
+                    workerDecoder = new LTDecoder(header.totalBlocks, header.blockSize, header.totalBlocks * header.blockSize);
+                    workerIsComplete = false;
+                }
+
+                const solved = workerDecoder.addDroplet(header.seed, payload);
+                const progressRatio = workerDecoder.getProgress();
+                const solvedCount = workerDecoder.solvedBlocks.size;
+                const totalCount = workerDecoder.K;
+                const progressPct = (progressRatio * 100).toFixed(4) + "%";
+
+                if (solved && !workerIsComplete) {
+                    workerIsComplete = true;
+                    const fullData = workerDecoder.reconstructData();
+                    if (fullData) {
+                        const meta = unpackFileMetadata(fullData);
+                        let filename = "chromabeam_received.bin";
+                        let filePayload = fullData;
+                        if (meta) {
+                            filename = meta.filename;
+                            filePayload = fullData.subarray(meta.metadataHeaderLen, meta.metadataHeaderLen + meta.filesize);
+                        }
+                        fileResult = {
+                            filename,
+                            filesize: filePayload.length,
+                            payloadBuffer: filePayload.buffer
+                        };
+                    }
+                }
+
+                self.postMessage({
+                    type: 'frameResult',
+                    locked: true,
+                    quad,
+                    detectMethod,
+                    caught: workerPacketsCaught,
+                    drops: workerCRCErrors,
+                    progress: progressRatio,
+                    progressPctFormatted: progressPct,
+                    solvedBlocks: solvedCount,
+                    totalBlocks: totalCount,
+                    configLabel: `${matchedConfig.label} (${rotationDeg}° rot)`,
+                    rotationDeg,
+                    lumaMetrics: lastLumaMetrics,
+                    latencyMs,
+                    isComplete: workerIsComplete,
+                    fileResult,
+                    logMsg: `[DECODE] Droplet seed #${header.seed} (K=${totalCount}) solved: ${solvedCount}/${totalCount} (${progressPct})`
+                }, fileResult ? [fileResult.payloadBuffer] : []);
+
+            } else {
+                if (quad) workerCRCErrors++;
+                const progressRatio = workerDecoder ? workerDecoder.getProgress() : 0;
+                const progressPct = (progressRatio * 100).toFixed(4) + "%";
+
+                self.postMessage({
+                    type: 'frameResult',
+                    locked: false,
+                    quad,
+                    detectMethod,
+                    caught: workerPacketsCaught,
+                    drops: workerCRCErrors,
+                    progress: progressRatio,
+                    progressPctFormatted: progressPct,
+                    solvedBlocks: workerDecoder ? workerDecoder.solvedBlocks.size : 0,
+                    totalBlocks: workerDecoder ? workerDecoder.K : 0,
+                    lumaMetrics: lastLumaMetrics,
+                    latencyMs,
+                    isComplete: workerIsComplete,
+                    fileResult: null,
+                    logMsg: null
+                });
+            }
+        } catch (err) {
+            console.error("[Worker] Frame processing exception:", err);
+            self.postMessage({
+                type: 'frameResult',
+                locked: false,
+                caught: workerPacketsCaught,
+                drops: workerCRCErrors + 1,
+                progress: 0,
+                progressPctFormatted: "0.0000%",
+                error: err.message,
+                logMsg: `[ERROR] Worker Exception: ${err.message}`
+            });
+        }
+    }
+};
+
+
+</script>
 <script>
 
 /* --- fountain.js --- */
@@ -1041,6 +2313,17 @@ class JSColorMatrixLayout {
         this.maxPayloadBytes = Math.floor(this.maxPayloadBits / 8);
     }
 
+    get anchorCenters() {
+        const N = this.gridSize;
+        const c = 2.5 / N;
+        return [
+            { x: c, y: c },              // Top-Left
+            { x: 1 - c, y: c },          // Top-Right
+            { x: 1 - c, y: 1 - c },      // Bottom-Right
+            { x: c, y: 1 - c }           // Bottom-Left
+        ];
+    }
+
     renderAnchors(grid2D) {
         const s = this.anchorSize;
         const N = this.gridSize;
@@ -1048,22 +2331,24 @@ class JSColorMatrixLayout {
         const black = 0;
 
         // 1:1:1:1:1 Concentric square anchors
-        // TL
+        // Standardized White center dots (1x1 at centroid) across all 4 corners for binarization invariance.
+
+        // TL (Center dot at (2, 2))
         for (let r = 0; r < s; r++) for (let c = 0; c < s; c++) grid2D[r][c] = white;
         for (let r = 1; r < s - 1; r++) for (let c = 1; c < s - 1; c++) grid2D[r][c] = black;
         grid2D[2][2] = white;
 
-        // TR
+        // TR (Center dot at (2, N-3))
         for (let r = 0; r < s; r++) for (let c = N - s; c < N; c++) grid2D[r][c] = white;
         for (let r = 1; r < s - 1; r++) for (let c = N - s + 1; c < N - 1; c++) grid2D[r][c] = black;
-        grid2D[2][N - 3] = (this.palette.length > 4) ? 4 : white; // Red dot if 8-color
+        grid2D[2][N - 3] = white;
 
-        // BR
+        // BR (Center dot at (N-3, N-3))
         for (let r = N - s; r < N; r++) for (let c = N - s; c < N; c++) grid2D[r][c] = white;
         for (let r = N - s + 1; r < N - 1; r++) for (let c = N - s + 1; c < N - 1; c++) grid2D[r][c] = black;
-        grid2D[N - 3][N - 3] = (this.palette.length > 2) ? 2 : white; // Green dot
+        grid2D[N - 3][N - 3] = white;
 
-        // BL
+        // BL (Center dot at (N-3, 2))
         for (let r = N - s; r < N; r++) for (let c = 0; c < s; c++) grid2D[r][c] = white;
         for (let r = N - s + 1; r < N - 1; r++) for (let c = 1; c < s - 1; c++) grid2D[r][c] = black;
         grid2D[N - 3][2] = white;
@@ -1144,6 +2429,16 @@ function gridIndicesToBytes(grid2D, layout) {
         out[i] = b;
     }
     return out;
+}
+
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+        PALETTES,
+        JS_ANCHOR_SIZE,
+        JSColorMatrixLayout,
+        bytesToGridIndices,
+        gridIndicesToBytes
+    };
 }
 
 
@@ -1955,21 +3250,88 @@ function initReceiver() {
     appendReceiverLog("[SYSTEM] ChromaBeam 3D Optical Scanner initialized.", "info");
 }
 
+// ===================== INLINE VISION & DECODER ENGINE FALLBACK =====================
+
+const INLINE_CANDIDATE_CONFIGS = [
+    { grid: 32, mode: 0, label: '32×32 B&W (Potato)' },
+    { grid: 48, mode: 0, label: '48×48 B&W' },
+    { grid: 64, mode: 0, label: '64×64 B&W' },
+    { grid: 32, mode: 1, label: '32×32 4-Color' },
+    { grid: 48, mode: 1, label: '48×48 4-Color' },
+    { grid: 48, mode: 2, label: '48×48 8-Color' },
+    { grid: 64, mode: 2, label: '64×64 8-Color' },
+];
+
+const INLINE_CACHED_LAYOUTS = {};
+function getInlineLayout(grid, mode) {
+    const key = `${grid}_${mode}`;
+    if (!INLINE_CACHED_LAYOUTS[key] && typeof JSColorMatrixLayout === 'function') {
+        INLINE_CACHED_LAYOUTS[key] = new JSColorMatrixLayout(grid, mode);
+    }
+    return INLINE_CACHED_LAYOUTS[key] || null;
+}
+
+let inlineDecoder = null;
+let inlineCurrentFileId = null;
+let inlineLockedConfig = null;
+
+function resetInlineDecoderSession() {
+    inlineDecoder = null;
+    inlineCurrentFileId = null;
+    inlineLockedConfig = null;
+}
+
 function setupScannerWorker() {
-    if (window.Worker) {
+    // 1. Check for inlined worker source in offline bundled HTML
+    const workerSrcElem = typeof document !== 'undefined' ? document.getElementById('scanner-worker-src') : null;
+    if (workerSrcElem && workerSrcElem.textContent && workerSrcElem.textContent.trim().length > 0 &&
+        typeof window !== 'undefined' && typeof window.Worker !== 'undefined' &&
+        typeof window.Blob !== 'undefined' && typeof window.URL !== 'undefined' &&
+        typeof window.URL.createObjectURL === 'function') {
+        try {
+            const workerCode = workerSrcElem.textContent;
+            const blob = new Blob([workerCode], { type: 'application/javascript' });
+            const blobUrl = URL.createObjectURL(blob);
+            scannerWorker = new Worker(blobUrl);
+            scannerWorker.onmessage = handleWorkerMessage;
+            scannerWorker.onerror = function(err) {
+                appendReceiverLog(`[WORKER ERROR] ${err.message || 'Worker thread failure'}`, "error");
+                console.warn("[Receiver] Worker error, falling back to inline decoding:", err);
+                try { scannerWorker.terminate(); } catch (_) {}
+                scannerWorker = null;
+                workerIsBusy = false;
+            };
+            appendReceiverLog("[SYSTEM] Multi-threaded Web Worker active (Offline Blob Engine).", "info");
+            return;
+        } catch (e) {
+            appendReceiverLog(`[SYSTEM] Blob Worker unavailable (${e.message}), attempting server worker or inline fallback.`, "warn");
+            console.warn("[Receiver] Blob Worker creation failed:", e);
+            scannerWorker = null;
+        }
+    }
+
+    // 2. Check for server-hosted scanner_worker.js
+    if (typeof window !== 'undefined' && typeof window.Worker !== 'undefined') {
         try {
             scannerWorker = new Worker('scanner_worker.js');
             scannerWorker.onmessage = handleWorkerMessage;
             scannerWorker.onerror = function(err) {
                 appendReceiverLog(`[WORKER ERROR] ${err.message || 'Worker thread failure'}`, "error");
-                console.warn("[Receiver] Worker error, fallback to inline:", err);
+                console.warn("[Receiver] Worker error, falling back to inline decoding:", err);
+                try { scannerWorker.terminate(); } catch (_) {}
                 scannerWorker = null;
+                workerIsBusy = false;
             };
             appendReceiverLog("[SYSTEM] Multi-threaded Web Worker background engine active.", "info");
+            return;
         } catch (e) {
             appendReceiverLog(`[SYSTEM] Web Worker unavailable (${e.message}), using inline fallback.`, "warn");
+            console.warn("[Receiver] Worker creation failed:", e);
             scannerWorker = null;
         }
+    } else {
+        appendReceiverLog("[SYSTEM] Web Worker not supported, using inline fallback.", "warn");
+        scannerWorker = null;
     }
 }
 
@@ -1986,6 +3348,7 @@ function resetReceiverSession() {
     if (scannerWorker) {
         scannerWorker.postMessage({ type: 'reset' });
     }
+    resetInlineDecoderSession();
     appendReceiverLog("[SESSION] Reception session reset. Ready for beam.", "info");
 }
 
@@ -2097,9 +3460,9 @@ function processReceiverFrame() {
         // Dispatch frame to Background Web Worker if idle
         if (!workerIsBusy && !receiverIsComplete) {
             const imgData = receiverCtx.getImageData(0, 0, vw, vh);
-            const buffer = imgData.data.buffer; // Transferable zero-copy
 
             if (scannerWorker) {
+                const buffer = imgData.data.buffer; // Transferable zero-copy
                 workerIsBusy = true;
                 scannerWorker.postMessage({
                     type: 'processFrame',
@@ -2130,6 +3493,193 @@ function applyBinarizerFilterToCanvas(w, h, threshold) {
     receiverCtx.putImageData(imgData, 0, 0);
 }
 
+// ===================== INLINE FRAME PROCESSING FALLBACK =====================
+
+function processFrameInline(imgData, vw, vh, guideRect) {
+    const startTime = performance.now();
+    const w = vw || (imgData ? imgData.width : 0);
+    const h = vh || (imgData ? imgData.height : 0);
+
+    if (receiverIsComplete) {
+        handleWorkerMessage({
+            data: {
+                type: 'frameResult',
+                locked: false,
+                caught: receiverPacketsCaught,
+                drops: receiverCRCErrors,
+                progress: 1.0,
+                progressPctFormatted: "100.0000%",
+                isComplete: true,
+                latencyMs: (performance.now() - startTime).toFixed(1)
+            }
+        });
+        return;
+    }
+
+    try {
+        // 1. Detect 4-point quadrilateral in 3D camera space
+        const detectRes = (typeof detectOpticalQuad === 'function')
+            ? detectOpticalQuad(imgData, w, h, guideRect)
+            : { quad: null, method: 'None' };
+        const quad = detectRes.quad;
+        const detectMethod = detectRes.method;
+
+        let decodedResult = null;
+        let matchedConfig = null;
+        let lastLumaMetrics = null;
+
+        if (quad && typeof sampleQuadGrid === 'function' && typeof decodeGridMultiOrientation === 'function') {
+            const configsToTest = inlineLockedConfig ? [inlineLockedConfig] : INLINE_CANDIDATE_CONFIGS;
+
+            for (const cfg of configsToTest) {
+                const layout = getInlineLayout(cfg.grid, cfg.mode);
+                if (!layout) continue;
+
+                // Primary sample pass
+                const sampleRes = sampleQuadGrid(imgData, w, h, quad, layout);
+                lastLumaMetrics = {
+                    lumaThreshold: sampleRes.lumaThreshold,
+                    minLuma: sampleRes.minLuma,
+                    maxLuma: sampleRes.maxLuma,
+                    contrast: sampleRes.contrast
+                };
+
+                let res = decodeGridMultiOrientation(sampleRes.grid2D, layout);
+
+                // Multi-threshold fallback for B&W mode (glare compensation)
+                if (!res && cfg.mode === 0 && sampleRes.contrast > 30) {
+                    const altThresholds = [sampleRes.lumaThreshold - 15, sampleRes.lumaThreshold + 15];
+                    for (const altT of altThresholds) {
+                        if (altT > 20 && altT < 240) {
+                            const altSample = sampleQuadGrid(imgData, w, h, quad, layout, altT);
+                            res = decodeGridMultiOrientation(altSample.grid2D, layout);
+                            if (res) break;
+                        }
+                    }
+                }
+
+                if (res) {
+                    decodedResult = res;
+                    matchedConfig = cfg;
+                    inlineLockedConfig = cfg;
+                    break;
+                }
+            }
+
+            if (!decodedResult && inlineLockedConfig) {
+                inlineLockedConfig = null; // Lost lock, resume sweep next frame
+            }
+        }
+
+        let fileResult = null;
+        const latencyMs = (performance.now() - startTime).toFixed(1);
+
+        if (decodedResult) {
+            const { packet, rotationDeg } = decodedResult;
+            const { header, payload } = packet;
+
+            if (!inlineDecoder || inlineCurrentFileId !== header.fileId) {
+                inlineCurrentFileId = header.fileId;
+                if (typeof LTDecoder === 'function') {
+                    inlineDecoder = new LTDecoder(header.totalBlocks, header.blockSize, header.totalBlocks * header.blockSize);
+                }
+            }
+
+            let solved = false;
+            let progressRatio = 0;
+            let solvedCount = 0;
+            let totalCount = header.totalBlocks || 0;
+
+            if (inlineDecoder) {
+                solved = inlineDecoder.addDroplet(header.seed, payload);
+                progressRatio = inlineDecoder.getProgress();
+                solvedCount = inlineDecoder.solvedBlocks ? inlineDecoder.solvedBlocks.size : 0;
+                totalCount = inlineDecoder.K;
+            }
+
+            const progressPct = (progressRatio * 100).toFixed(4) + "%";
+
+            if (solved && !receiverIsComplete && inlineDecoder) {
+                const fullData = inlineDecoder.reconstructData();
+                if (fullData) {
+                    const meta = (typeof unpackFileMetadata === 'function') ? unpackFileMetadata(fullData) : null;
+                    let filename = "chromabeam_received.bin";
+                    let filePayload = fullData;
+                    if (meta) {
+                        filename = meta.filename;
+                        filePayload = fullData.subarray(meta.metadataHeaderLen, meta.metadataHeaderLen + meta.filesize);
+                    }
+                    fileResult = {
+                        filename,
+                        filesize: filePayload.length,
+                        payloadBuffer: filePayload.buffer
+                    };
+                }
+            }
+
+            handleWorkerMessage({
+                data: {
+                    type: 'frameResult',
+                    locked: true,
+                    quad,
+                    detectMethod,
+                    caught: receiverPacketsCaught + 1,
+                    drops: receiverCRCErrors,
+                    progress: progressRatio,
+                    progressPctFormatted: progressPct,
+                    solvedBlocks: solvedCount,
+                    totalBlocks: totalCount,
+                    configLabel: `${matchedConfig.label} (${rotationDeg}° rot)`,
+                    rotationDeg,
+                    lumaMetrics: lastLumaMetrics,
+                    latencyMs,
+                    isComplete: (solved && !receiverIsComplete) ? true : receiverIsComplete,
+                    fileResult,
+                    logMsg: `[DECODE:INLINE] Droplet seed #${header.seed} (K=${totalCount}) solved: ${solvedCount}/${totalCount} (${progressPct})`
+                }
+            });
+
+        } else {
+            const progressRatio = inlineDecoder ? inlineDecoder.getProgress() : 0;
+            const progressPct = (progressRatio * 100).toFixed(4) + "%";
+
+            handleWorkerMessage({
+                data: {
+                    type: 'frameResult',
+                    locked: false,
+                    quad,
+                    detectMethod,
+                    caught: receiverPacketsCaught,
+                    drops: quad ? (receiverCRCErrors + 1) : receiverCRCErrors,
+                    progress: progressRatio,
+                    progressPctFormatted: progressPct,
+                    solvedBlocks: (inlineDecoder && inlineDecoder.solvedBlocks) ? inlineDecoder.solvedBlocks.size : 0,
+                    totalBlocks: inlineDecoder ? inlineDecoder.K : 0,
+                    lumaMetrics: lastLumaMetrics,
+                    latencyMs,
+                    isComplete: receiverIsComplete,
+                    fileResult: null,
+                    logMsg: null
+                }
+            });
+        }
+    } catch (err) {
+        console.error("[Receiver] Inline processing exception:", err);
+        handleWorkerMessage({
+            data: {
+                type: 'frameResult',
+                locked: false,
+                caught: receiverPacketsCaught,
+                drops: receiverCRCErrors + 1,
+                progress: 0,
+                progressPctFormatted: "0.0000%",
+                error: err.message,
+                logMsg: `[ERROR:INLINE] ${err.message}`
+            }
+        });
+    }
+}
+
 // ===================== WORKER MESSAGE HANDLER =====================
 
 function handleWorkerMessage(e) {
@@ -2155,24 +3705,30 @@ function handleWorkerMessage(e) {
 
     // Update Telemetry HUD
     if (res.detectMethod) {
-        document.getElementById('receiverDetectorVal').textContent = `${res.detectMethod} ${res.locked ? '★' : '○'}`;
+        const detElem = document.getElementById('receiverDetectorVal');
+        if (detElem) detElem.textContent = `${res.detectMethod} ${res.locked ? '★' : '○'}`;
     }
     if (res.lumaMetrics) {
         const lm = res.lumaMetrics;
-        document.getElementById('receiverLumaVal').textContent = `Thresh: ${lm.lumaThreshold} (Contr: ${lm.contrast})`;
+        const lumaElem = document.getElementById('receiverLumaVal');
+        if (lumaElem) lumaElem.textContent = `Thresh: ${lm.lumaThreshold} (Contr: ${lm.contrast})`;
     }
 
     const badge = document.getElementById('receiverStatusBadge');
-    if (res.locked) {
-        badge.textContent = `● LOCKED: ${receiverLastConfigLabel}`;
-        badge.className = "badge-locked";
-    } else {
-        badge.textContent = "● SCANNING (360° 3D Active)";
-        badge.className = "badge-scanning";
+    if (badge) {
+        if (res.locked) {
+            badge.textContent = `● LOCKED: ${receiverLastConfigLabel}`;
+            badge.className = "badge-locked";
+        } else {
+            badge.textContent = "● SCANNING (360° 3D Active)";
+            badge.className = "badge-scanning";
+        }
     }
 
-    document.getElementById('receiverDropletVal').textContent =
-        `Caught: ${receiverPacketsCaught} (Drops: ${receiverCRCErrors})`;
+    const dropElem = document.getElementById('receiverDropletVal');
+    if (dropElem) {
+        dropElem.textContent = `Caught: ${receiverPacketsCaught} (Drops: ${receiverCRCErrors})`;
+    }
 
     // Append log line if present
     if (res.logMsg) {
@@ -2187,22 +3743,33 @@ function handleWorkerMessage(e) {
 
 function downloadReceivedFile(fileResult) {
     updateReceiverProgress(1.0, "100.0000%", fileResult.filesize, fileResult.filesize);
-    document.getElementById('receiverStatusBadge').textContent = "★ TRANSFER COMPLETE!";
-    document.getElementById('receiverStatusBadge').className = "badge-complete";
+    const badge = document.getElementById('receiverStatusBadge');
+    if (badge) {
+        badge.textContent = "★ TRANSFER COMPLETE!";
+        badge.className = "badge-complete";
+    }
 
     const { filename, payloadBuffer } = fileResult;
-    const blob = new Blob([payloadBuffer], { type: 'application/octet-stream' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    if (typeof Blob !== 'undefined' && typeof URL !== 'undefined' && typeof document !== 'undefined') {
+        try {
+            const blob = new Blob([payloadBuffer], { type: 'application/octet-stream' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            if (document.body) document.body.appendChild(a);
+            a.click();
+            if (document.body) document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        } catch (e) {
+            console.warn("[Receiver] Download file trigger error:", e);
+        }
+    }
 
     appendReceiverLog(`[SUCCESS] Assembly complete! Downloaded ${filename} (${(payloadBuffer.byteLength / 1024).toFixed(1)} KB)`, "decode");
-    alert(`🎉 Success! Received and assembled file: ${filename} (${(payloadBuffer.byteLength / 1024).toFixed(1)} KB)`);
+    if (typeof alert === 'function') {
+        alert(`🎉 Success! Received and assembled file: ${filename} (${(payloadBuffer.byteLength / 1024).toFixed(1)} KB)`);
+    }
 }
 
 // ===================== LOGGING CONSOLE =====================
@@ -2318,6 +3885,19 @@ function drawViewfinderOverlay(guideRect, quad, isLocked, configLabel, vw, vh) {
     ctx.textAlign = 'center';
     ctx.fillText(isLocked ? '● OPTICAL LOCK ENGAGED (3D PERSPECTIVE ACTIVE)' : 'Point camera at flashing matrix (Any angle / 360° rotation)', x + w / 2, y - 10);
 }
+
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+        setupScannerWorker,
+        processFrameInline,
+        resetReceiverSession,
+        resetInlineDecoderSession,
+        handleWorkerMessage,
+        INLINE_CANDIDATE_CONFIGS,
+        getInlineLayout
+    };
+}
+
 
 
 </script>
