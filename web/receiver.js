@@ -166,7 +166,7 @@ async function startReceiverCamera() {
         await receiverVideo.play();
 
         receiverRunning = true;
-        resetReceiverSession();
+        // Do NOT reset session on pause/resume — preserve all solved fountain blocks!
 
         document.getElementById('receiverStartBtn').style.display = 'none';
         document.getElementById('receiverStopBtn').style.display = 'inline-block';

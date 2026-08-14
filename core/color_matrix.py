@@ -51,7 +51,8 @@ class ColorMatrixLayout:
     def __init__(self, grid_size: int = 48, color_mode: int = MODE_3BIT_8COLOR):
         self.grid_size = grid_size
         self.color_mode = color_mode
-        self.anchor_size = ANCHOR_SIZE
+        self.module_scale = max(1, grid_size // 56)
+        self.anchor_size = 7 * self.module_scale
 
         if self.color_mode == MODE_1BIT_BW:
             self.palette = PALETTE_1BIT
@@ -102,7 +103,8 @@ class ColorMatrixLayout:
         Normalized canonical floating point centroids [TL, TR, BR, BL] in [0, 1]^2 space.
         """
         N = float(self.grid_size)
-        c = 3.5 / N
+        s = float(self.anchor_size)
+        c = (s / 2.0) / N
         return [
             (c, c),              # Top-Left
             (1.0 - c, c),        # Top-Right
@@ -112,26 +114,27 @@ class ColorMatrixLayout:
 
     def render_anchors(self, grid: np.ndarray):
         s = self.anchor_size
+        m = self.module_scale
         N = self.grid_size
         white = self.palette[-1]
         black = self.palette[0]
 
-        # 1:1:3:1:1 Standard QR Finder Patterns in 3 corners (TL, TR, BL)
+        # 1:1:3:1:1 Standard QR Finder Patterns in 3 corners (TL, TR, BL) with scaled modules
 
-        # Top-Left: Solid Black outer (7x7), White ring (5x5), Black center (3x3)
+        # Top-Left
         grid[0:s, 0:s] = black
-        grid[1:s-1, 1:s-1] = white
-        grid[2:s-2, 2:s-2] = black
+        grid[m:s-m, m:s-m] = white
+        grid[2*m:s-2*m, 2*m:s-2*m] = black
 
         # Top-Right
         grid[0:s, N-s:N] = black
-        grid[1:s-1, N-s+1:N-1] = white
-        grid[2:s-2, N-s+2:N-2] = black
+        grid[m:s-m, N-s+m:N-m] = white
+        grid[2*m:s-2*m, N-s+2*m:N-2*m] = black
 
         # Bottom-Left
         grid[N-s:N, 0:s] = black
-        grid[N-s+1:N-1, 1:s-1] = white
-        grid[N-s+2:N-2, 2:s-2] = black
+        grid[N-s+m:N-m, m:s-m] = white
+        grid[N-s+2*m:N-2*m, 2*m:s-2*m] = black
 
         # Calibration swatches along top border (coordinates (0, 5) ... (0, 9))
         if self.color_mode == MODE_3BIT_8COLOR:

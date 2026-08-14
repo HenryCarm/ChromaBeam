@@ -352,8 +352,8 @@ function find2DAnchorQuad(data, w, h) {
                         currentState++;
                         stateCount[currentState] = 1;
                     } else {
-                        // Check 1:1:1:1:1 ratio
-                        if (checkRatio11111(stateCount, w)) {
+                        // Check 1:1:3:1:1 ratio
+                        if (checkRatio11311(stateCount, w)) {
                             const totalW = stateCount[0] + stateCount[1] + stateCount[2] + stateCount[3] + stateCount[4];
                             const centerX = x - stateCount[4] - stateCount[3] - Math.floor(stateCount[2] / 2);
 
@@ -405,15 +405,18 @@ function find2DAnchorQuad(data, w, h) {
     return findBestAnchorQuad(clusters, w, h);
 }
 
-function checkRatio11111(counts, maxW) {
+function checkRatio11311(counts, maxW) {
     const total = counts[0] + counts[1] + counts[2] + counts[3] + counts[4];
-    if (total < 8 || total > maxW * 0.45) return false;
-    const avg = total / 5.0;
-    const maxVar = avg * 0.90;
-    for (let i = 0; i < 5; i++) {
-        if (Math.abs(counts[i] - avg) > maxVar || counts[i] === 0) return false;
-    }
-    return true;
+    if (total < 7 || total > maxW * 0.70) return false;
+    const moduleSize = total / 7.0;
+    const maxVariance = moduleSize * 0.85;
+
+    // Check 1 : 1 : 3 : 1 : 1 ratio (QR finder standard)
+    return Math.abs(moduleSize - counts[0]) < maxVariance &&
+           Math.abs(moduleSize - counts[1]) < maxVariance &&
+           Math.abs(3.0 * moduleSize - counts[2]) < 3.0 * maxVariance &&
+           Math.abs(moduleSize - counts[3]) < maxVariance &&
+           Math.abs(moduleSize - counts[4]) < maxVariance;
 }
 
 function checkVerticalCrossSection(gray, w, h, cx, startY, T, expectedW) {
@@ -436,11 +439,11 @@ function checkVerticalCrossSection(gray, w, h, cx, startY, T, expectedW) {
                 currentState++;
                 stateCount[currentState] = 1;
             } else {
-                if (checkRatio11111(stateCount, w)) {
+                if (checkRatio11311(stateCount, w)) {
                     const totalH = stateCount[0] + stateCount[1] + stateCount[2] + stateCount[3] + stateCount[4];
-                    if (Math.abs(totalH - expectedW) / Math.max(totalH, expectedW) < 0.70) {
+                    if (Math.abs(totalH - expectedW) / Math.max(totalH, expectedW) < 0.75) {
                         const centerY = y - stateCount[4] - stateCount[3] - Math.floor(stateCount[2] / 2);
-                        if (Math.abs(centerY - startY) < expectedW * 0.7) {
+                        if (Math.abs(centerY - startY) < expectedW * 0.75) {
                             return { centerY, totalH };
                         }
                     }

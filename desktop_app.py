@@ -35,12 +35,19 @@ from desktop_receiver.tracker import OpticalTracker
 from desktop_receiver.color_classifier import AdaptiveColorClassifier
 
 
-class OpticalMatrixCanvas(QWidget):
+class MatrixCanvas(QWidget):
+    clicked = pyqtSignal()
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setMinimumSize(380, 380)
         self.current_pixmap = None
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setToolTip("Click to expand Fullscreen view ⛶")
         self.setStyleSheet("background-color: #000000; border-radius: 8px;")
+
+    def mousePressEvent(self, event):
+        self.clicked.emit()
 
     def update_frame(self, rgb_matrix: np.ndarray):
         h, w, ch = rgb_matrix.shape
@@ -58,6 +65,26 @@ class OpticalMatrixCanvas(QWidget):
             x = (self.width() - side) // 2
             y = (self.height() - side) // 2
             painter.drawPixmap(x, y, side, side, self.current_pixmap)
+
+
+class FullscreenMatrixDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("QR ChromaBeam — Fullscreen Transmission")
+        self.setStyleSheet("background-color: #000000;")
+        self.setWindowFlags(Qt.WindowType.Window | Qt.WindowType.FramelessWindowHint)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        self.canvas = MatrixCanvas()
+        layout.addWidget(self.canvas)
+        self.canvas.clicked.connect(self.close)
+
+    def mousePressEvent(self, event):
+        self.close()
+
+    def keyPressEvent(self, event):
+        if event.key() in (Qt.Key.Key_Escape, Qt.Key.Key_F11):
+            self.close()
 
 
 class CameraWorkerThread(QThread):
@@ -307,7 +334,9 @@ class UnifiedChromaBeamApp(QMainWindow):
         layout.setSpacing(16)
 
         left = QVBoxLayout()
-        self.canvas = OpticalMatrixCanvas(self)
+        self.canvas = MatrixCanvas(self)
+        self.canvas.clicked.connect(self._toggle_fullscreen)
+        self.fs_dialog = None
         left.addWidget(self.canvas, stretch=1)
         layout.addLayout(left, stretch=3)
 
@@ -458,6 +487,29 @@ class UnifiedChromaBeamApp(QMainWindow):
         self.layout_engine = ColorMatrixLayout(grid_size=self.grid_size, color_mode=self.color_mode)
         if self.file_data:
             self._set_payload(self.file_data, self.filename)
+        else:
+            self._render_idle_frame()
+
+    def _render_idle_frame(self):
+        if self.color_mode == MODE_1BIT_BW and self.grid_size == 64:
+            idle_grid = packet_to_standard_qr_rgb(b"ChromaBeam")
+        else:
+            idle_grid = np.zeros((self.grid_size, self.grid_size, 3), dtype=np.uint8)
+            self.layout_engine.render_anchors(idle_grid)
+        self.canvas.update_frame(idle_grid)
+        if hasattr(self, 'fs_dialog') and self.fs_dialog and self.fs_dialog.isVisible():
+            self.fs_dialog.canvas.update_frame(idle_grid)
+
+    def _toggle_fullscreen(self):
+        if not hasattr(self, 'fs_dialog') or self.fs_dialog is None or not self.fs_dialog.isVisible():
+            self.fs_dialog = FullscreenMatrixDialog(self)
+            if self.canvas.current_pixmap:
+                self.fs_dialog.canvas.current_pixmap = self.canvas.current_pixmap
+                self.fs_dialog.canvas.update()
+            self.fs_dialog.showFullScreen()
+        else:
+            self.fs_dialog.close()
+            self.fs_dialog = None
 
     def _save_settings(self):
         self.settings.setValue("grid_size", self.grid_size)
@@ -580,7 +632,7 @@ class UnifiedChromaBeamApp(QMainWindow):
         self.filesize = len(data)
         self.file_id = random.randint(1000, 60000)
 
-        if self.color_mode == MODE_1BIT_BW:
+        if self.color_mode == MODE_1BIT_BW and self.grid_size == 64:
             if self.filesize <= 2048:
                 block_size = 64
             elif self.filesize <= 64 * 1024:
@@ -599,6 +651,9 @@ class UnifiedChromaBeamApp(QMainWindow):
 
         self.file_lbl.setText(f"File: {self.filename}")
         self.size_lbl.setText(f"Size: {self.filesize / 1024:.1f} KB | Blocks K: {self.encoder.K} (Block: {block_size} B)")
+
+        if not self.is_streaming:
+            self._render_idle_frame()
 
     def _on_mode_changed(self, index: int):
         self.color_mode = index
@@ -648,11 +703,14 @@ class UnifiedChromaBeamApp(QMainWindow):
             payload=block_payload
         )
 
-        if self.color_mode == MODE_1BIT_BW:
+        if self.color_mode == MODE_1BIT_BW and self.grid_size == 64:
             rgb_grid = packet_to_standard_qr_rgb(packet)
         else:
             rgb_grid = bytes_to_color_grid(packet, self.layout_engine)
+
         self.canvas.update_frame(rgb_grid)
+        if hasattr(self, 'fs_dialog') and self.fs_dialog and self.fs_dialog.isVisible():
+            self.fs_dialog.canvas.update_frame(rgb_grid)
 
         elapsed = max(0.001, time.time() - self.start_stream_time)
         bytes_sent = self.total_droplets_sent * len(packet)
