@@ -1,13 +1,14 @@
 /**
- * ChromaBeam High-Performance Universal Optical Receiver v5
+ * ChromaBeam High-Performance Universal Optical Receiver v6
  * 
  * Features:
- * - Full 3D Perspective Homography Tracking
- * - 360° 4-Way Rotation Invariance (0°, 90°, 180° upside-down, 270° sideways)
- * - Multi-Threaded Web Worker Pipeline (60 FPS Butter UI on Main Thread)
- * - Transferable ArrayBuffers for zero-copy memory transfer
- * - Adaptive Quad Locking & Telemetry Reticles
- * - Automatic Offline Fallback
+ * - Real-Time Diagnostic Terminal Logger on-screen
+ * - Pi-Accurate Progress Reporting (0.0000% + Block Counts)
+ * - Live Vision Binarizer / Debug Overlay Toggle
+ * - 360° 4-Way Rotation Invariance (0°, 90°, 180°, 270°)
+ * - Multi-Threaded Web Worker Pipeline (60 FPS Main UI)
+ * - Transferable Zero-Copy Buffer Streaming
+ * - Full Dynamic Lighting & Contrast Telemetry
  */
 
 let receiverVideo = null;
@@ -18,6 +19,7 @@ let receiverRunning = false;
 
 let scannerWorker = null;
 let workerIsBusy = false;
+let showBinarizerView = false;
 
 let receiverPacketsCaught = 0;
 let receiverCRCErrors = 0;
@@ -28,6 +30,11 @@ let receiverCalculatedFPS = 0;
 let receiverLastQuad = null;
 let receiverLastConfigLabel = '';
 let receiverIsLocked = false;
+let receiverLastLumaMetrics = null;
+let receiverWorkerLatency = 0;
+
+const MAX_LOG_ENTRIES = 120;
+let receiverLogLines = [];
 
 function initReceiver() {
     receiverVideo = document.getElementById('receiverVideo');
@@ -36,6 +43,7 @@ function initReceiver() {
         receiverCtx = receiverCanvas.getContext('2d', { willReadFrequently: true });
     }
     setupScannerWorker();
+    appendReceiverLog("[SYSTEM] ChromaBeam 3D Optical Scanner initialized.", "info");
 }
 
 function setupScannerWorker() {
@@ -44,11 +52,13 @@ function setupScannerWorker() {
             scannerWorker = new Worker('scanner_worker.js');
             scannerWorker.onmessage = handleWorkerMessage;
             scannerWorker.onerror = function(err) {
+                appendReceiverLog(`[WORKER ERROR] ${err.message || 'Worker thread failure'}`, "error");
                 console.warn("[Receiver] Worker error, fallback to inline:", err);
                 scannerWorker = null;
             };
+            appendReceiverLog("[SYSTEM] Multi-threaded Web Worker background engine active.", "info");
         } catch (e) {
-            console.warn("[Receiver] Could not start Worker, using inline mode:", e);
+            appendReceiverLog(`[SYSTEM] Web Worker unavailable (${e.message}), using inline fallback.`, "warn");
             scannerWorker = null;
         }
     }
@@ -62,11 +72,12 @@ function resetReceiverSession() {
     receiverIsLocked = false;
     receiverLastConfigLabel = '';
     workerIsBusy = false;
-    updateReceiverProgress(0);
+    updateReceiverProgress(0, "0.0000%", 0, 0);
 
     if (scannerWorker) {
         scannerWorker.postMessage({ type: 'reset' });
     }
+    appendReceiverLog("[SESSION] Reception session reset. Ready for beam.", "info");
 }
 
 async function startReceiverCamera() {
@@ -94,6 +105,7 @@ async function startReceiverCamera() {
         document.getElementById('receiverStatusBadge').textContent = "● SCANNING (360° 3D Active)";
         document.getElementById('receiverStatusBadge').className = "badge-scanning";
 
+        appendReceiverLog("[CAMERA] 60 FPS stream acquired. Auto-density & 360° search running.", "vision");
         requestAnimationFrame(processReceiverFrame);
     } catch (err) {
         if (err.name === "NotAllowedError" || err.name === "TypeError" || err.name === "NotFoundError") {
@@ -103,6 +115,7 @@ async function startReceiverCamera() {
         } else {
             alert("Camera error: " + err.message);
         }
+        appendReceiverLog(`[CAMERA ERROR] ${err.message}`, "error");
     }
 }
 
@@ -116,6 +129,17 @@ function stopReceiverCamera() {
     document.getElementById('receiverStopBtn').style.display = 'none';
     document.getElementById('receiverStatusBadge').textContent = "● IDLE";
     document.getElementById('receiverStatusBadge').className = "badge-idle";
+    appendReceiverLog("[CAMERA] Camera stopped. Scanner idle.", "info");
+}
+
+function toggleBinarizerView() {
+    showBinarizerView = !showBinarizerView;
+    const btn = document.getElementById('receiverDebugToggleBtn');
+    if (btn) {
+        btn.textContent = showBinarizerView ? "👁️ Normal View" : "👁️ Vision View";
+        btn.classList.toggle('btn-primary', showBinarizerView);
+    }
+    appendReceiverLog(`[UI] Vision Binarizer View: ${showBinarizerView ? 'ON' : 'OFF'}`, "info");
 }
 
 // ===================== MAIN UI 60 FPS LOOP =====================
@@ -129,7 +153,8 @@ function processReceiverFrame() {
         receiverCalculatedFPS = receiverFpsCounter;
         receiverFpsCounter = 0;
         receiverLastFpsTime = now;
-        document.getElementById('receiverFpsVal').textContent = `${receiverCalculatedFPS} FPS`;
+        const fpsLabel = `${receiverCalculatedFPS} FPS (Worker: ${receiverWorkerLatency}ms)`;
+        document.getElementById('receiverFpsVal').textContent = fpsLabel;
     }
 
     if (receiverVideo.readyState >= receiverVideo.HAVE_ENOUGH_DATA) {
@@ -144,7 +169,12 @@ function processReceiverFrame() {
         // Draw camera frame directly to canvas
         receiverCtx.drawImage(receiverVideo, 0, 0, vw, vh);
 
-        // Guide bounds
+        // Optional: Render binarized vision mask if toggled
+        if (showBinarizerView && receiverLastLumaMetrics) {
+            applyBinarizerFilterToCanvas(vw, vh, receiverLastLumaMetrics.lumaThreshold || 128);
+        }
+
+        // Guide bounds (center 85%)
         const guideSide = Math.min(vw, vh) * 0.85;
         const gx = Math.floor((vw - guideSide) / 2);
         const gy = Math.floor((vh - guideSide) / 2);
@@ -158,7 +188,7 @@ function processReceiverFrame() {
         // Dispatch frame to Background Web Worker if idle
         if (!workerIsBusy && !receiverIsComplete) {
             const imgData = receiverCtx.getImageData(0, 0, vw, vh);
-            const buffer = imgData.data.buffer; // Transferable
+            const buffer = imgData.data.buffer; // Transferable zero-copy
 
             if (scannerWorker) {
                 workerIsBusy = true;
@@ -170,13 +200,25 @@ function processReceiverFrame() {
                     guideRect
                 }, [buffer]);
             } else {
-                // Inline synchronous fallback if worker unavailable
                 processFrameInline(imgData, vw, vh, guideRect);
             }
         }
     }
 
     requestAnimationFrame(processReceiverFrame);
+}
+
+function applyBinarizerFilterToCanvas(w, h, threshold) {
+    const imgData = receiverCtx.getImageData(0, 0, w, h);
+    const data = imgData.data;
+    for (let i = 0; i < data.length; i += 4) {
+        const luma = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+        const val = (luma > threshold) ? 255 : 0;
+        data[i] = val;
+        data[i + 1] = val;
+        data[i + 2] = val;
+    }
+    receiverCtx.putImageData(imgData, 0, 0);
 }
 
 // ===================== WORKER MESSAGE HANDLER =====================
@@ -191,8 +233,25 @@ function handleWorkerMessage(e) {
     receiverIsLocked = res.locked;
     if (res.quad) receiverLastQuad = res.quad;
     if (res.configLabel) receiverLastConfigLabel = res.configLabel;
+    if (res.lumaMetrics) receiverLastLumaMetrics = res.lumaMetrics;
+    if (res.latencyMs) receiverWorkerLatency = res.latencyMs;
 
-    updateReceiverProgress(res.progress || 0);
+    // Update Pi-accurate progress
+    updateReceiverProgress(
+        res.progress || 0,
+        res.progressPctFormatted || "0.0000%",
+        res.solvedBlocks || 0,
+        res.totalBlocks || 0
+    );
+
+    // Update Telemetry HUD
+    if (res.detectMethod) {
+        document.getElementById('receiverDetectorVal').textContent = `${res.detectMethod} ${res.locked ? '★' : '○'}`;
+    }
+    if (res.lumaMetrics) {
+        const lm = res.lumaMetrics;
+        document.getElementById('receiverLumaVal').textContent = `Thresh: ${lm.lumaThreshold} (Contr: ${lm.contrast})`;
+    }
 
     const badge = document.getElementById('receiverStatusBadge');
     if (res.locked) {
@@ -206,6 +265,11 @@ function handleWorkerMessage(e) {
     document.getElementById('receiverDropletVal').textContent =
         `Caught: ${receiverPacketsCaught} (Drops: ${receiverCRCErrors})`;
 
+    // Append log line if present
+    if (res.logMsg) {
+        appendReceiverLog(res.logMsg, res.locked ? "decode" : "info");
+    }
+
     if (res.isComplete && res.fileResult && !receiverIsComplete) {
         receiverIsComplete = true;
         downloadReceivedFile(res.fileResult);
@@ -213,7 +277,7 @@ function handleWorkerMessage(e) {
 }
 
 function downloadReceivedFile(fileResult) {
-    updateReceiverProgress(1.0);
+    updateReceiverProgress(1.0, "100.0000%", fileResult.filesize, fileResult.filesize);
     document.getElementById('receiverStatusBadge').textContent = "★ TRANSFER COMPLETE!";
     document.getElementById('receiverStatusBadge').className = "badge-complete";
 
@@ -228,81 +292,55 @@ function downloadReceivedFile(fileResult) {
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
 
-    alert(`🎉 Success! Received file: ${filename} (${(payloadBuffer.byteLength / 1024).toFixed(1)} KB)`);
+    appendReceiverLog(`[SUCCESS] Assembly complete! Downloaded ${filename} (${(payloadBuffer.byteLength / 1024).toFixed(1)} KB)`, "decode");
+    alert(`🎉 Success! Received and assembled file: ${filename} (${(payloadBuffer.byteLength / 1024).toFixed(1)} KB)`);
 }
 
-// ===================== INLINE FALLBACK ENGINE =====================
+// ===================== LOGGING CONSOLE =====================
 
-let inlineDecoder = null;
-let inlineCurrentFileId = null;
-let inlineLockedConfig = null;
+function appendReceiverLog(msg, type = "info") {
+    const timestamp = new Date().toTimeString().split(' ')[0];
+    const entry = `[${timestamp}] ${msg}`;
+    receiverLogLines.push({ text: entry, type });
+    if (receiverLogLines.length > MAX_LOG_ENTRIES) receiverLogLines.shift();
 
-function processFrameInline(imgData, vw, vh, guideRect) {
-    const quad = detectOpticalQuad(imgData, vw, vh, guideRect);
-    if (!quad) return;
-
-    receiverLastQuad = quad;
-    let decodedResult = null;
-    let matchedConfig = null;
-
-    const candidateConfigs = [
-        { grid: 32, mode: 0, label: '32×32 B&W (Potato)' },
-        { grid: 48, mode: 0, label: '48×48 B&W' },
-        { grid: 64, mode: 0, label: '64×64 B&W' },
-        { grid: 32, mode: 1, label: '32×32 4-Color' },
-        { grid: 48, mode: 1, label: '48×48 4-Color' },
-        { grid: 48, mode: 2, label: '48×48 8-Color' },
-        { grid: 64, mode: 2, label: '64×64 8-Color' },
-    ];
-
-    for (const cfg of candidateConfigs) {
-        const layout = new JSColorMatrixLayout(cfg.grid, cfg.mode);
-        const sampledGrid = sampleQuadGrid(imgData, vw, vh, quad, layout);
-        const res = decodeGridMultiOrientation(sampledGrid, layout);
-        if (res) {
-            decodedResult = res;
-            matchedConfig = cfg;
-            break;
-        }
+    const logBox = document.getElementById('receiverDebugLog');
+    if (logBox) {
+        const lineElem = document.createElement('div');
+        lineElem.className = `log-entry log-${type}`;
+        lineElem.textContent = entry;
+        logBox.appendChild(lineElem);
+        logBox.scrollTop = logBox.scrollHeight;
     }
+}
 
-    if (decodedResult) {
-        receiverPacketsCaught++;
-        receiverIsLocked = true;
-        receiverLastConfigLabel = `${matchedConfig.label} (${decodedResult.rotationDeg}° rot)`;
-        const { packet } = decodedResult;
-        const { header, payload } = packet;
+function clearReceiverLogs() {
+    receiverLogLines = [];
+    const logBox = document.getElementById('receiverDebugLog');
+    if (logBox) logBox.innerHTML = '<div class="log-entry log-info">[SYSTEM] Logs cleared.</div>';
+}
 
-        if (!inlineDecoder || inlineCurrentFileId !== header.fileId) {
-            inlineCurrentFileId = header.fileId;
-            inlineDecoder = new LTDecoder(header.totalBlocks, header.blockSize, header.totalBlocks * header.blockSize);
-            receiverIsComplete = false;
-        }
+function copyReceiverLogs() {
+    const text = receiverLogLines.map(l => l.text).join('\n');
+    navigator.clipboard.writeText(text).then(() => {
+        alert("📋 Diagnostic logs copied to clipboard!");
+    }).catch(() => {
+        prompt("Copy logs manually:", text);
+    });
+}
 
-        const solved = inlineDecoder.addDroplet(header.seed, payload);
-        updateReceiverProgress(inlineDecoder.getProgress());
+function updateReceiverProgress(ratio, formattedPct, solved, total) {
+    const pct = Math.min(100, Math.max(0, ratio * 100));
+    const bar = document.getElementById('receiverProgressBar');
+    if (bar) bar.style.width = `${pct}%`;
 
-        if (solved && !receiverIsComplete) {
-            receiverIsComplete = true;
-            const fullData = inlineDecoder.reconstructData();
-            if (fullData) {
-                const meta = unpackFileMetadata(fullData);
-                let filename = "chromabeam_received.bin";
-                let filePayload = fullData;
-                if (meta) {
-                    filename = meta.filename;
-                    filePayload = fullData.subarray(meta.metadataHeaderLen, meta.metadataHeaderLen + meta.filesize);
-                }
-                downloadReceivedFile({ filename, payloadBuffer: filePayload.buffer });
-            }
-        }
-    } else {
-        receiverIsLocked = false;
-        receiverCRCErrors++;
+    const lbl = document.getElementById('receiverProgressLabel');
+    if (lbl) lbl.textContent = formattedPct || `${pct.toFixed(4)}%`;
+
+    const blockLbl = document.getElementById('receiverBlockCountLabel');
+    if (blockLbl) {
+        blockLbl.textContent = (total > 0) ? `Solved: ${solved} / ${total} Blocks (${formattedPct})` : "Waiting for first packet...";
     }
-
-    document.getElementById('receiverDropletVal').textContent =
-        `Caught: ${receiverPacketsCaught} (Drops: ${receiverCRCErrors})`;
 }
 
 // ===================== AR VIEWFINDER & 3D RETICLES =====================
@@ -345,9 +383,8 @@ function drawViewfinderOverlay(guideRect, quad, isLocked, configLabel, vw, vh) {
         ctx.closePath();
         ctx.stroke();
 
-        // Corner circles & crosshairs
         quad.forEach((pt, i) => {
-            ctx.fillStyle = (i === 0) ? '#ff4444' : (isLocked ? '#00ff66' : '#58a6ff'); // TL anchor red dot
+            ctx.fillStyle = (i === 0) ? '#ff4444' : (isLocked ? '#00ff66' : '#58a6ff');
             ctx.beginPath();
             ctx.arc(pt.x, pt.y, 5, 0, 2 * Math.PI);
             ctx.fill();
@@ -359,7 +396,6 @@ function drawViewfinderOverlay(guideRect, quad, isLocked, configLabel, vw, vh) {
             ctx.stroke();
         });
 
-        // Label above quad
         if (configLabel) {
             ctx.fillStyle = isLocked ? '#00ff66' : '#58a6ff';
             ctx.font = 'bold 12px sans-serif';
@@ -368,17 +404,8 @@ function drawViewfinderOverlay(guideRect, quad, isLocked, configLabel, vw, vh) {
         }
     }
 
-    // Top instruction label
     ctx.fillStyle = isLocked ? '#00ff66' : '#ffffff';
     ctx.font = '12px sans-serif';
     ctx.textAlign = 'center';
     ctx.fillText(isLocked ? '● OPTICAL LOCK ENGAGED (3D PERSPECTIVE ACTIVE)' : 'Point camera at flashing matrix (Any angle / 360° rotation)', x + w / 2, y - 10);
-}
-
-function updateReceiverProgress(ratio) {
-    const pct = Math.min(100, Math.floor(ratio * 100));
-    const bar = document.getElementById('receiverProgressBar');
-    if (bar) bar.style.width = `${pct}%`;
-    const lbl = document.getElementById('receiverProgressLabel');
-    if (lbl) lbl.textContent = `${pct}%`;
 }

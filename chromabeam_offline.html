@@ -390,6 +390,37 @@ select, input[type="range"] {
 .badge-locked { color: var(--accent-green-hover); font-size: 12px; font-weight: 600; }
 .badge-complete { color: #58a6ff; font-size: 12px; font-weight: 700; }
 
+/* Real-Time Diagnostic Terminal Logger */
+.log-terminal {
+    background: #05080c;
+    border: 1px solid #30363d;
+    border-radius: 8px;
+    padding: 10px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    line-height: 1.45;
+    color: #8b949e;
+    height: 140px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+    box-shadow: inset 0 2px 6px rgba(0,0,0,0.5);
+}
+
+.log-entry { margin-bottom: 3px; }
+.log-info { color: #58a6ff; }
+.log-vision { color: #3fb950; }
+.log-decode { color: #79c0ff; font-weight: 600; }
+.log-warn { color: #d29922; }
+.log-error { color: #f85149; font-weight: 700; }
+
+.btn-sm {
+    padding: 4px 10px;
+    font-size: 11px;
+    border-radius: 6px;
+}
+
+
 </style>
 </head>
 <body>
@@ -512,41 +543,58 @@ select, input[type="range"] {
                     <video id="receiverVideo" playsinline muted autoplay style="opacity: 0;"></video>
                     <canvas id="receiverCanvas" width="640" height="640"></canvas>
                 </div>
-                <div style="display: flex; gap: 10px;">
-                    <button id="receiverStartBtn" class="btn btn-success btn-lg" onclick="startReceiverCamera()">📸 START CAMERA RECEIVER</button>
-                    <button id="receiverStopBtn" class="btn btn-danger btn-lg" onclick="stopReceiverCamera()" style="display: none;">🛑 STOP CAMERA</button>
+                <div style="display: flex; gap: 10px; margin-top: 10px;">
+                    <button id="receiverStartBtn" class="btn btn-success btn-lg" style="flex: 1;" onclick="startReceiverCamera()">📸 START CAMERA RECEIVER</button>
+                    <button id="receiverStopBtn" class="btn btn-danger btn-lg" style="flex: 1; display: none;" onclick="stopReceiverCamera()">🛑 STOP CAMERA</button>
+                    <button id="receiverDebugToggleBtn" class="btn btn-secondary" onclick="toggleBinarizerView()" style="font-size: 12px; padding: 6px 12px;">👁️ Vision View</button>
                 </div>
             </div>
 
-            <!-- Right: Reception & Decoder Progress -->
+            <!-- Right: Reception, Precision Progress & Diagnostic Log Stream -->
             <div class="card">
-                <span class="card-title">Fountain Solver Progress</span>
-
-                <div class="progress-container">
-                    <div id="receiverProgressBar" class="progress-fill"></div>
-                    <div id="receiverProgressLabel" class="progress-text">0%</div>
+                <div class="control-row">
+                    <span class="card-title">Fountain Solver Progress</span>
+                    <span id="receiverBlockCountLabel" style="font-size: 11px; font-family: var(--font-mono); color: #58a6ff;">Solved: 0 / 0 Blocks</span>
                 </div>
 
-                <span class="card-title">Reception Telemetry (Auto-Detect Active)</span>
+                <div class="progress-container" style="height: 28px;">
+                    <div id="receiverProgressBar" class="progress-fill"></div>
+                    <div id="receiverProgressLabel" class="progress-text">0.0000%</div>
+                </div>
+
+                <span class="card-title" style="margin-top: 12px;">Diagnostic Telemetry & Vision HUD</span>
                 <div class="telemetry-grid">
                     <div class="metric-box">
-                        <div class="metric-label">Camera Frame Rate</div>
+                        <div class="metric-label">Camera / Worker FPS</div>
                         <div id="receiverFpsVal" class="metric-value">0 FPS</div>
                     </div>
                     <div class="metric-box">
                         <div class="metric-label">Droplets Received</div>
-                        <div id="receiverDropletVal" class="metric-value" style="font-size: 14px; color: #58a6ff;">Caught: 0 (Drops: 0)</div>
+                        <div id="receiverDropletVal" class="metric-value" style="font-size: 13px; color: #58a6ff;">Caught: 0 (Drops: 0)</div>
+                    </div>
+                    <div class="metric-box">
+                        <div class="metric-label">Vision Detector</div>
+                        <div id="receiverDetectorVal" class="metric-value" style="font-size: 12px; color: #3fb950;">Idle</div>
+                    </div>
+                    <div class="metric-box">
+                        <div class="metric-label">Luma & Contrast</div>
+                        <div id="receiverLumaVal" class="metric-value" style="font-size: 12px; color: #d29922;">--</div>
                     </div>
                 </div>
 
-                <div class="metric-box" style="margin-top: 10px;">
-                    <div class="metric-label" style="margin-bottom: 6px;">How to Scan</div>
-                    <ul style="font-size: 12px; color: var(--text-secondary); padding-left: 18px; line-height: 1.6;">
-                        <li><b>Fill the green bracket guide</b> with the flashing matrix on your screen.</li>
-                        <li>Hold steady — ChromaBeam <b>auto-detects grid size and color mode</b>!</li>
-                        <li>Once the progress bar hits 100%, the file downloads automatically!</li>
-                        <li>Tip: Use <b>🛡️ Potato Camera (B&W)</b> preset on the sender for best reliability.</li>
-                    </ul>
+                <!-- Live Diagnostic Log Stream -->
+                <div style="margin-top: 12px;">
+                    <div class="control-row" style="margin-bottom: 6px;">
+                        <span class="card-title" style="margin: 0; font-size: 12px;">Live Diagnostic Log Stream</span>
+                        <div style="display: flex; gap: 6px;">
+                            <button class="btn btn-secondary btn-sm" onclick="copyReceiverLogs()">📋 Copy Logs</button>
+                            <button class="btn btn-secondary btn-sm" onclick="clearReceiverLogs()">🗑️ Clear</button>
+                        </div>
+                    </div>
+                    <div id="receiverDebugLog" class="log-terminal">
+[SYSTEM] ChromaBeam 3D Optical Scanner Ready.
+[INFO] Waiting for camera start...
+                    </div>
                 </div>
             </div>
         </section>
@@ -1101,9 +1149,15 @@ function gridIndicesToBytes(grid2D, layout) {
 
 /* --- vision_engine.js --- */
 /**
- * ChromaBeam Pure JavaScript 3D Perspective & Computer Vision Engine
- * Supports 4-point Projective Transform (Homography), 360° 4-Way Rotation Invariance,
- * Finder Pattern Detection, Multi-Pixel Bilinear Sampling, and Adaptive Thresholding.
+ * ChromaBeam Pure JavaScript 3D Perspective & Computer Vision Engine v2
+ * 
+ * Features:
+ * - 4-Point Projective Transform (Homography)
+ * - 360° 4-Way Rotation Invariance (0°, 90°, 180°, 270°)
+ * - Multi-Thresholding Strategy (Otsu, Adaptive Median, Contrast-Boosted)
+ * - Dynamic Lighting & Glare Compensation
+ * - Full Diagnostic Telemetry Export
+ * - Real-Time Debug Binarizer Renderer
  */
 
 class ProjectiveTransform {
@@ -1136,7 +1190,6 @@ class ProjectiveTransform {
             // Perspective transform
             const det = dx1 * dy2 - dx2 * dy1;
             if (Math.abs(det) < 1e-7) {
-                // Degenerate quad fallback to affine
                 this.a = x1 - x0; this.b = x3 - x0; this.c = x0;
                 this.d = y1 - y0; this.e = y3 - y0; this.f = y0;
                 this.g = 0; this.h = 0;
@@ -1175,14 +1228,11 @@ function rotateGrid2D(grid2D, rotationSteps) {
     for (let r = 0; r < N; r++) {
         for (let c = 0; c < N; c++) {
             if (rot === 1) {
-                // 90 deg clockwise
-                out[c][N - 1 - r] = grid2D[r][c];
+                out[c][N - 1 - r] = grid2D[r][c]; // 90 deg clockwise
             } else if (rot === 2) {
-                // 180 deg upside-down
-                out[N - 1 - r][N - 1 - c] = grid2D[r][c];
+                out[N - 1 - r][N - 1 - c] = grid2D[r][c]; // 180 deg upside-down
             } else if (rot === 3) {
-                // 270 deg clockwise (90 deg counter-clockwise)
-                out[N - 1 - c][r] = grid2D[r][c];
+                out[N - 1 - c][r] = grid2D[r][c]; // 270 deg clockwise
             }
         }
     }
@@ -1193,7 +1243,7 @@ function rotateGrid2D(grid2D, rotationSteps) {
  * Samples a grid from an arbitrary 4-point quadrilateral using 3D perspective mapping.
  * Uses 3x3 multi-pixel bilinear subpixel averaging to eliminate moire and camera noise.
  */
-function sampleQuadGrid(imgData, w, h, quad, layout) {
+function sampleQuadGrid(imgData, w, h, quad, layout, customThreshold = null) {
     const N = layout.gridSize;
     const colorMode = layout.colorMode;
     const palette = layout.palette;
@@ -1202,41 +1252,50 @@ function sampleQuadGrid(imgData, w, h, quad, layout) {
     const transform = new ProjectiveTransform(quad[0], quad[1], quad[2], quad[3]);
     const grid2D = Array.from({ length: N }, () => new Uint8Array(N));
 
-    // Sample pixels across grid to compute Otsu threshold for B&W
+    let minLuma = 255;
+    let maxLuma = 0;
     let lumaThreshold = 128;
+
+    // Fast sampling pass to compute luminance distribution & Otsu threshold
     if (colorMode === 0) {
-        const samples = [];
-        const step = Math.max(1, Math.floor(N / 8));
-        for (let r = 0; r < N; r += step) {
-            for (let c = 0; c < N; c += step) {
-                const pt = transform.transform((c + 0.5) / N, (r + 0.5) / N);
-                const px = Math.floor(pt.x);
-                const py = Math.floor(pt.y);
-                if (px >= 0 && px < w && py >= 0 && py < h) {
-                    const idx = (py * w + px) * 4;
-                    const luma = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
-                    samples.push(luma);
+        if (customThreshold !== null) {
+            lumaThreshold = customThreshold;
+        } else {
+            const samples = [];
+            const step = Math.max(1, Math.floor(N / 8));
+            for (let r = 0; r < N; r += step) {
+                for (let c = 0; c < N; c += step) {
+                    const pt = transform.transform((c + 0.5) / N, (r + 0.5) / N);
+                    const px = Math.floor(pt.x);
+                    const py = Math.floor(pt.y);
+                    if (px >= 0 && px < w && py >= 0 && py < h) {
+                        const idx = (py * w + px) * 4;
+                        const luma = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
+                        samples.push(luma);
+                        if (luma < minLuma) minLuma = luma;
+                        if (luma > maxLuma) maxLuma = luma;
+                    }
                 }
             }
-        }
-        if (samples.length > 20) {
-            lumaThreshold = calculateOtsuFromLumaArray(samples);
+            if (samples.length > 10) {
+                lumaThreshold = calculateOtsuFromLumaArray(samples);
+            }
         }
     }
 
+    // Main cell sampling pass
     for (let r = 0; r < N; r++) {
         const v = (r + 0.5) / N;
         for (let c = 0; c < N; c++) {
             const u = (c + 0.5) / N;
             
-            // Center point
             const pt = transform.transform(u, v);
             const cx = pt.x;
             const cy = pt.y;
 
-            // Approximate cell radius in camera pixels
+            // Approximate subpixel sampling radius
             const ptRight = transform.transform((c + 1.0) / N, v);
-            const cellRadius = Math.max(1.0, Math.hypot(ptRight.x - cx, ptRight.y - cy) * 0.25);
+            const cellRadius = Math.max(1.0, Math.hypot(ptRight.x - cx, ptRight.y - cy) * 0.22);
 
             let avgR = 0, avgG = 0, avgB = 0, count = 0;
             const offsets = [-cellRadius, 0, cellRadius];
@@ -1280,7 +1339,13 @@ function sampleQuadGrid(imgData, w, h, quad, layout) {
         }
     }
 
-    return grid2D;
+    return {
+        grid2D,
+        lumaThreshold,
+        minLuma: Math.round(minLuma),
+        maxLuma: Math.round(maxLuma),
+        contrast: Math.round(maxLuma - minLuma)
+    };
 }
 
 function calculateOtsuFromLumaArray(samples) {
@@ -1317,73 +1382,77 @@ function calculateOtsuFromLumaArray(samples) {
 
 /**
  * Universal Quad & Finder Pattern Detector.
- * Searches the camera frame for:
- * 1. Full 4-Anchor Pattern Finder (concentric square anchors 1:1:1:1:1)
- * 2. High-contrast square boundaries
- * 3. Guide region fallback
+ * Returns { quad, method, confidence }
  */
 function detectOpticalQuad(imgData, w, h, guideRect) {
     const data = imgData.data;
 
-    // Fast pass: scan for 4 corner anchor clusters
+    // 1. First Pass: Anchor Pattern Matching (1:1:1:1:1 concentric squares)
     const anchorClusters = findAnchorClusters(data, w, h);
     if (anchorClusters && anchorClusters.length === 4) {
         const orderedAnchors = orderQuadPointsClockwise(anchorClusters);
-        // Expand from anchor centers to outer grid corners
-        // Anchors are 5x5 cells centered at (2.5, 2.5) cells in an N-grid
-        // Outer corners are extrapolated slightly (~6%) outward
         const cx = (orderedAnchors[0].x + orderedAnchors[1].x + orderedAnchors[2].x + orderedAnchors[3].x) / 4;
         const cy = (orderedAnchors[0].y + orderedAnchors[1].y + orderedAnchors[2].y + orderedAnchors[3].y) / 4;
-        const scale = 1.08; // extrapolate to outer edge of the anchors
+        const scale = 1.08;
 
-        return orderedAnchors.map(pt => ({
+        const quad = orderedAnchors.map(pt => ({
             x: Math.max(0, Math.min(w - 1, cx + (pt.x - cx) * scale)),
             y: Math.max(0, Math.min(h - 1, cy + (pt.y - cy) * scale))
         }));
+
+        return { quad, method: '4-Anchor Finder', confidence: 0.95 };
     }
 
-    // Secondary pass: Detect high contrast bounds within / around guide
+    // 2. Second Pass: Adaptive dynamic bounds inside guide region
     const gx = guideRect ? guideRect.x : Math.floor(w * 0.1);
     const gy = guideRect ? guideRect.y : Math.floor(h * 0.1);
     const gw = guideRect ? guideRect.w : Math.floor(w * 0.8);
     const gh = guideRect ? guideRect.h : Math.floor(h * 0.8);
 
-    const bounds = detectHighContrastBounds(data, w, h, gx, gy, gw, gh);
+    const bounds = detectAdaptiveContrastBounds(data, w, h, gx, gy, gw, gh);
     if (bounds) {
-        return [
-            { x: bounds.x, y: bounds.y },                          // TL
-            { x: bounds.x + bounds.w, y: bounds.y },              // TR
-            { x: bounds.x + bounds.w, y: bounds.y + bounds.h },   // BR
-            { x: bounds.x, y: bounds.y + bounds.h }               // BL
+        const quad = [
+            { x: bounds.x, y: bounds.y },
+            { x: bounds.x + bounds.w, y: bounds.y },
+            { x: bounds.x + bounds.w, y: bounds.y + bounds.h },
+            { x: bounds.x, y: bounds.y + bounds.h }
         ];
+        return { quad, method: 'Adaptive Boundary', confidence: 0.80 };
     }
 
-    // Default guide quad
-    return [
+    // 3. Fallback: Guide Region Quad
+    const defaultQuad = [
         { x: gx, y: gy },
         { x: gx + gw, y: gy },
         { x: gx + gw, y: gy + gh },
         { x: gx, y: gy + gh }
     ];
+    return { quad: defaultQuad, method: 'Viewfinder ROI', confidence: 0.50 };
 }
 
-/**
- * Searches for concentric anchor patterns across scan lines
- */
 function findAnchorClusters(data, w, h) {
     const candidates = [];
-    const stepY = Math.max(4, Math.floor(h / 80));
+    const stepY = Math.max(4, Math.floor(h / 90));
 
-    // Scan horizontal lines for 1:1:1:1:1 or 1:3:1 white/black/white transitions
+    // Dynamic contrast determination
+    let minL = 255, maxL = 0;
+    for (let i = 0; i < Math.min(data.length, 20000); i += 16) {
+        const l = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+        if (l < minL) minL = l;
+        if (l > maxL) maxL = l;
+    }
+    const midLuma = (minL + maxL) * 0.5;
+    if (maxL - minL < 30) return null; // Too low contrast to distinguish anchors
+
     for (let y = 10; y < h - 10; y += stepY) {
         let state = 0;
         let counts = [0, 0, 0, 0, 0];
-        let lastColor = 0; // 0: black, 1: white
+        let lastColor = 0;
 
         for (let x = 10; x < w - 10; x += 2) {
             const idx = (y * w + x) * 4;
             const luma = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
-            const color = (luma > 140) ? 1 : 0;
+            const color = (luma > midLuma) ? 1 : 0;
 
             if (x === 10) {
                 lastColor = color;
@@ -1399,12 +1468,11 @@ function findAnchorClusters(data, w, h) {
                     state++;
                     counts[state] = 1;
                 } else {
-                    // Check if counts match white:black:white:black:white (1:1:1:1:1)
-                    if (counts[0] > 2 && counts[1] > 2 && counts[2] > 2 && counts[3] > 2 && counts[4] > 2) {
+                    if (counts[0] > 1 && counts[1] > 1 && counts[2] > 1 && counts[3] > 1 && counts[4] > 1) {
                         const total = counts[0] + counts[1] + counts[2] + counts[3] + counts[4];
                         const avg = total / 5.0;
                         const maxDiff = Math.max(...counts.map(c => Math.abs(c - avg)));
-                        if (maxDiff < avg * 1.5 && total >= 15 && total < w * 0.4) {
+                        if (maxDiff < avg * 1.8 && total >= 12 && total < w * 0.45) {
                             const centerX = x - (counts[4] + counts[3] + counts[2] / 2);
                             candidates.push({ x: centerX, y });
                         }
@@ -1423,9 +1491,8 @@ function findAnchorClusters(data, w, h) {
 
     if (candidates.length < 4) return null;
 
-    // Cluster nearby candidates
     const clusters = [];
-    const radius = Math.min(w, h) * 0.08;
+    const radius = Math.min(w, h) * 0.09;
 
     for (const pt of candidates) {
         let found = false;
@@ -1443,16 +1510,14 @@ function findAnchorClusters(data, w, h) {
         }
     }
 
-    // Sort by count descending and take top 4 clusters if separated
     clusters.sort((a, b) => b.count - a.count);
     if (clusters.length >= 4) {
         const top4 = clusters.slice(0, 4);
-        // Verify they form a convex quadrilateral
-        const minDistance = Math.min(w, h) * 0.15;
+        const minDistance = Math.min(w, h) * 0.12;
         for (let i = 0; i < 4; i++) {
             for (let j = i + 1; j < 4; j++) {
                 if (Math.hypot(top4[i].x - top4[j].x, top4[i].y - top4[j].y) < minDistance) {
-                    return null; // too close, degenerate
+                    return null;
                 }
             }
         }
@@ -1462,9 +1527,6 @@ function findAnchorClusters(data, w, h) {
     return null;
 }
 
-/**
- * Orders 4 points clockwise starting with Top-Left
- */
 function orderQuadPointsClockwise(pts) {
     const cx = (pts[0].x + pts[1].x + pts[2].x + pts[3].x) / 4;
     const cy = (pts[0].y + pts[1].y + pts[2].y + pts[3].y) / 4;
@@ -1475,7 +1537,6 @@ function orderQuadPointsClockwise(pts) {
         return angleA - angleB;
     });
 
-    // Find the one closest to top-left (-3*PI/4)
     let tlIdx = 0;
     let minSum = Infinity;
     for (let i = 0; i < 4; i++) {
@@ -1494,9 +1555,23 @@ function orderQuadPointsClockwise(pts) {
     ];
 }
 
-function detectHighContrastBounds(data, imgW, imgH, gx, gy, gw, gh) {
-    const BRIGHT_THRESHOLD = 150;
-    const MIN_BRIGHT = 3;
+function detectAdaptiveContrastBounds(data, imgW, imgH, gx, gy, gw, gh) {
+    // Dynamic sample of luma in guide region
+    let minLuma = 255, maxLuma = 0;
+    for (let y = gy; y < gy + gh; y += 8) {
+        for (let x = gx; x < gx + gw; x += 8) {
+            const idx = (y * imgW + x) * 4;
+            const l = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
+            if (l < minLuma) minLuma = l;
+            if (l > maxLuma) maxLuma = l;
+        }
+    }
+
+    const contrast = maxLuma - minLuma;
+    if (contrast < 35) return null; // Insufficient lighting contrast
+
+    const threshold = minLuma + contrast * 0.45;
+    const MIN_BRIGHT = 2;
     let top = -1, bottom = -1, left = -1, right = -1;
 
     for (let y = gy; y < gy + gh; y += 2) {
@@ -1504,7 +1579,7 @@ function detectHighContrastBounds(data, imgW, imgH, gx, gy, gw, gh) {
         for (let x = gx; x < gx + gw; x += 3) {
             const idx = (y * imgW + x) * 4;
             const luma = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
-            if (luma > BRIGHT_THRESHOLD) bCount++;
+            if (luma > threshold) bCount++;
         }
         if (bCount >= MIN_BRIGHT) { top = y; break; }
     }
@@ -1514,7 +1589,7 @@ function detectHighContrastBounds(data, imgW, imgH, gx, gy, gw, gh) {
         for (let x = gx; x < gx + gw; x += 3) {
             const idx = (y * imgW + x) * 4;
             const luma = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
-            if (luma > BRIGHT_THRESHOLD) bCount++;
+            if (luma > threshold) bCount++;
         }
         if (bCount >= MIN_BRIGHT) { bottom = y; break; }
     }
@@ -1524,7 +1599,7 @@ function detectHighContrastBounds(data, imgW, imgH, gx, gy, gw, gh) {
         for (let y = gy; y < gy + gh; y += 3) {
             const idx = (y * imgW + x) * 4;
             const luma = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
-            if (luma > BRIGHT_THRESHOLD) bCount++;
+            if (luma > threshold) bCount++;
         }
         if (bCount >= MIN_BRIGHT) { left = x; break; }
     }
@@ -1534,7 +1609,7 @@ function detectHighContrastBounds(data, imgW, imgH, gx, gy, gw, gh) {
         for (let y = gy; y < gy + gh; y += 3) {
             const idx = (y * imgW + x) * 4;
             const luma = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
-            if (luma > BRIGHT_THRESHOLD) bCount++;
+            if (luma > threshold) bCount++;
         }
         if (bCount >= MIN_BRIGHT) { right = x; break; }
     }
@@ -1558,7 +1633,7 @@ function detectHighContrastBounds(data, imgW, imgH, gx, gy, gw, gh) {
 
 /**
  * Fast Multi-Orientation Decoder.
- * Tries 0°, 90°, 180°, 270° rotations of the sampled grid and returns the valid packet + rotation angle.
+ * Tries 0°, 90°, 180°, 270° rotations of the sampled grid.
  */
 function decodeGridMultiOrientation(sampledGrid, layout) {
     for (let rot = 0; rot < 4; rot++) {
@@ -1833,15 +1908,16 @@ function toggleSenderFullscreen() {
 
 /* --- receiver.js --- */
 /**
- * ChromaBeam High-Performance Universal Optical Receiver v5
+ * ChromaBeam High-Performance Universal Optical Receiver v6
  * 
  * Features:
- * - Full 3D Perspective Homography Tracking
- * - 360° 4-Way Rotation Invariance (0°, 90°, 180° upside-down, 270° sideways)
- * - Multi-Threaded Web Worker Pipeline (60 FPS Butter UI on Main Thread)
- * - Transferable ArrayBuffers for zero-copy memory transfer
- * - Adaptive Quad Locking & Telemetry Reticles
- * - Automatic Offline Fallback
+ * - Real-Time Diagnostic Terminal Logger on-screen
+ * - Pi-Accurate Progress Reporting (0.0000% + Block Counts)
+ * - Live Vision Binarizer / Debug Overlay Toggle
+ * - 360° 4-Way Rotation Invariance (0°, 90°, 180°, 270°)
+ * - Multi-Threaded Web Worker Pipeline (60 FPS Main UI)
+ * - Transferable Zero-Copy Buffer Streaming
+ * - Full Dynamic Lighting & Contrast Telemetry
  */
 
 let receiverVideo = null;
@@ -1852,6 +1928,7 @@ let receiverRunning = false;
 
 let scannerWorker = null;
 let workerIsBusy = false;
+let showBinarizerView = false;
 
 let receiverPacketsCaught = 0;
 let receiverCRCErrors = 0;
@@ -1862,6 +1939,11 @@ let receiverCalculatedFPS = 0;
 let receiverLastQuad = null;
 let receiverLastConfigLabel = '';
 let receiverIsLocked = false;
+let receiverLastLumaMetrics = null;
+let receiverWorkerLatency = 0;
+
+const MAX_LOG_ENTRIES = 120;
+let receiverLogLines = [];
 
 function initReceiver() {
     receiverVideo = document.getElementById('receiverVideo');
@@ -1870,6 +1952,7 @@ function initReceiver() {
         receiverCtx = receiverCanvas.getContext('2d', { willReadFrequently: true });
     }
     setupScannerWorker();
+    appendReceiverLog("[SYSTEM] ChromaBeam 3D Optical Scanner initialized.", "info");
 }
 
 function setupScannerWorker() {
@@ -1878,11 +1961,13 @@ function setupScannerWorker() {
             scannerWorker = new Worker('scanner_worker.js');
             scannerWorker.onmessage = handleWorkerMessage;
             scannerWorker.onerror = function(err) {
+                appendReceiverLog(`[WORKER ERROR] ${err.message || 'Worker thread failure'}`, "error");
                 console.warn("[Receiver] Worker error, fallback to inline:", err);
                 scannerWorker = null;
             };
+            appendReceiverLog("[SYSTEM] Multi-threaded Web Worker background engine active.", "info");
         } catch (e) {
-            console.warn("[Receiver] Could not start Worker, using inline mode:", e);
+            appendReceiverLog(`[SYSTEM] Web Worker unavailable (${e.message}), using inline fallback.`, "warn");
             scannerWorker = null;
         }
     }
@@ -1896,11 +1981,12 @@ function resetReceiverSession() {
     receiverIsLocked = false;
     receiverLastConfigLabel = '';
     workerIsBusy = false;
-    updateReceiverProgress(0);
+    updateReceiverProgress(0, "0.0000%", 0, 0);
 
     if (scannerWorker) {
         scannerWorker.postMessage({ type: 'reset' });
     }
+    appendReceiverLog("[SESSION] Reception session reset. Ready for beam.", "info");
 }
 
 async function startReceiverCamera() {
@@ -1928,6 +2014,7 @@ async function startReceiverCamera() {
         document.getElementById('receiverStatusBadge').textContent = "● SCANNING (360° 3D Active)";
         document.getElementById('receiverStatusBadge').className = "badge-scanning";
 
+        appendReceiverLog("[CAMERA] 60 FPS stream acquired. Auto-density & 360° search running.", "vision");
         requestAnimationFrame(processReceiverFrame);
     } catch (err) {
         if (err.name === "NotAllowedError" || err.name === "TypeError" || err.name === "NotFoundError") {
@@ -1937,6 +2024,7 @@ async function startReceiverCamera() {
         } else {
             alert("Camera error: " + err.message);
         }
+        appendReceiverLog(`[CAMERA ERROR] ${err.message}`, "error");
     }
 }
 
@@ -1950,6 +2038,17 @@ function stopReceiverCamera() {
     document.getElementById('receiverStopBtn').style.display = 'none';
     document.getElementById('receiverStatusBadge').textContent = "● IDLE";
     document.getElementById('receiverStatusBadge').className = "badge-idle";
+    appendReceiverLog("[CAMERA] Camera stopped. Scanner idle.", "info");
+}
+
+function toggleBinarizerView() {
+    showBinarizerView = !showBinarizerView;
+    const btn = document.getElementById('receiverDebugToggleBtn');
+    if (btn) {
+        btn.textContent = showBinarizerView ? "👁️ Normal View" : "👁️ Vision View";
+        btn.classList.toggle('btn-primary', showBinarizerView);
+    }
+    appendReceiverLog(`[UI] Vision Binarizer View: ${showBinarizerView ? 'ON' : 'OFF'}`, "info");
 }
 
 // ===================== MAIN UI 60 FPS LOOP =====================
@@ -1963,7 +2062,8 @@ function processReceiverFrame() {
         receiverCalculatedFPS = receiverFpsCounter;
         receiverFpsCounter = 0;
         receiverLastFpsTime = now;
-        document.getElementById('receiverFpsVal').textContent = `${receiverCalculatedFPS} FPS`;
+        const fpsLabel = `${receiverCalculatedFPS} FPS (Worker: ${receiverWorkerLatency}ms)`;
+        document.getElementById('receiverFpsVal').textContent = fpsLabel;
     }
 
     if (receiverVideo.readyState >= receiverVideo.HAVE_ENOUGH_DATA) {
@@ -1978,7 +2078,12 @@ function processReceiverFrame() {
         // Draw camera frame directly to canvas
         receiverCtx.drawImage(receiverVideo, 0, 0, vw, vh);
 
-        // Guide bounds
+        // Optional: Render binarized vision mask if toggled
+        if (showBinarizerView && receiverLastLumaMetrics) {
+            applyBinarizerFilterToCanvas(vw, vh, receiverLastLumaMetrics.lumaThreshold || 128);
+        }
+
+        // Guide bounds (center 85%)
         const guideSide = Math.min(vw, vh) * 0.85;
         const gx = Math.floor((vw - guideSide) / 2);
         const gy = Math.floor((vh - guideSide) / 2);
@@ -1992,7 +2097,7 @@ function processReceiverFrame() {
         // Dispatch frame to Background Web Worker if idle
         if (!workerIsBusy && !receiverIsComplete) {
             const imgData = receiverCtx.getImageData(0, 0, vw, vh);
-            const buffer = imgData.data.buffer; // Transferable
+            const buffer = imgData.data.buffer; // Transferable zero-copy
 
             if (scannerWorker) {
                 workerIsBusy = true;
@@ -2004,13 +2109,25 @@ function processReceiverFrame() {
                     guideRect
                 }, [buffer]);
             } else {
-                // Inline synchronous fallback if worker unavailable
                 processFrameInline(imgData, vw, vh, guideRect);
             }
         }
     }
 
     requestAnimationFrame(processReceiverFrame);
+}
+
+function applyBinarizerFilterToCanvas(w, h, threshold) {
+    const imgData = receiverCtx.getImageData(0, 0, w, h);
+    const data = imgData.data;
+    for (let i = 0; i < data.length; i += 4) {
+        const luma = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+        const val = (luma > threshold) ? 255 : 0;
+        data[i] = val;
+        data[i + 1] = val;
+        data[i + 2] = val;
+    }
+    receiverCtx.putImageData(imgData, 0, 0);
 }
 
 // ===================== WORKER MESSAGE HANDLER =====================
@@ -2025,8 +2142,25 @@ function handleWorkerMessage(e) {
     receiverIsLocked = res.locked;
     if (res.quad) receiverLastQuad = res.quad;
     if (res.configLabel) receiverLastConfigLabel = res.configLabel;
+    if (res.lumaMetrics) receiverLastLumaMetrics = res.lumaMetrics;
+    if (res.latencyMs) receiverWorkerLatency = res.latencyMs;
 
-    updateReceiverProgress(res.progress || 0);
+    // Update Pi-accurate progress
+    updateReceiverProgress(
+        res.progress || 0,
+        res.progressPctFormatted || "0.0000%",
+        res.solvedBlocks || 0,
+        res.totalBlocks || 0
+    );
+
+    // Update Telemetry HUD
+    if (res.detectMethod) {
+        document.getElementById('receiverDetectorVal').textContent = `${res.detectMethod} ${res.locked ? '★' : '○'}`;
+    }
+    if (res.lumaMetrics) {
+        const lm = res.lumaMetrics;
+        document.getElementById('receiverLumaVal').textContent = `Thresh: ${lm.lumaThreshold} (Contr: ${lm.contrast})`;
+    }
 
     const badge = document.getElementById('receiverStatusBadge');
     if (res.locked) {
@@ -2040,6 +2174,11 @@ function handleWorkerMessage(e) {
     document.getElementById('receiverDropletVal').textContent =
         `Caught: ${receiverPacketsCaught} (Drops: ${receiverCRCErrors})`;
 
+    // Append log line if present
+    if (res.logMsg) {
+        appendReceiverLog(res.logMsg, res.locked ? "decode" : "info");
+    }
+
     if (res.isComplete && res.fileResult && !receiverIsComplete) {
         receiverIsComplete = true;
         downloadReceivedFile(res.fileResult);
@@ -2047,7 +2186,7 @@ function handleWorkerMessage(e) {
 }
 
 function downloadReceivedFile(fileResult) {
-    updateReceiverProgress(1.0);
+    updateReceiverProgress(1.0, "100.0000%", fileResult.filesize, fileResult.filesize);
     document.getElementById('receiverStatusBadge').textContent = "★ TRANSFER COMPLETE!";
     document.getElementById('receiverStatusBadge').className = "badge-complete";
 
@@ -2062,81 +2201,55 @@ function downloadReceivedFile(fileResult) {
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
 
-    alert(`🎉 Success! Received file: ${filename} (${(payloadBuffer.byteLength / 1024).toFixed(1)} KB)`);
+    appendReceiverLog(`[SUCCESS] Assembly complete! Downloaded ${filename} (${(payloadBuffer.byteLength / 1024).toFixed(1)} KB)`, "decode");
+    alert(`🎉 Success! Received and assembled file: ${filename} (${(payloadBuffer.byteLength / 1024).toFixed(1)} KB)`);
 }
 
-// ===================== INLINE FALLBACK ENGINE =====================
+// ===================== LOGGING CONSOLE =====================
 
-let inlineDecoder = null;
-let inlineCurrentFileId = null;
-let inlineLockedConfig = null;
+function appendReceiverLog(msg, type = "info") {
+    const timestamp = new Date().toTimeString().split(' ')[0];
+    const entry = `[${timestamp}] ${msg}`;
+    receiverLogLines.push({ text: entry, type });
+    if (receiverLogLines.length > MAX_LOG_ENTRIES) receiverLogLines.shift();
 
-function processFrameInline(imgData, vw, vh, guideRect) {
-    const quad = detectOpticalQuad(imgData, vw, vh, guideRect);
-    if (!quad) return;
-
-    receiverLastQuad = quad;
-    let decodedResult = null;
-    let matchedConfig = null;
-
-    const candidateConfigs = [
-        { grid: 32, mode: 0, label: '32×32 B&W (Potato)' },
-        { grid: 48, mode: 0, label: '48×48 B&W' },
-        { grid: 64, mode: 0, label: '64×64 B&W' },
-        { grid: 32, mode: 1, label: '32×32 4-Color' },
-        { grid: 48, mode: 1, label: '48×48 4-Color' },
-        { grid: 48, mode: 2, label: '48×48 8-Color' },
-        { grid: 64, mode: 2, label: '64×64 8-Color' },
-    ];
-
-    for (const cfg of candidateConfigs) {
-        const layout = new JSColorMatrixLayout(cfg.grid, cfg.mode);
-        const sampledGrid = sampleQuadGrid(imgData, vw, vh, quad, layout);
-        const res = decodeGridMultiOrientation(sampledGrid, layout);
-        if (res) {
-            decodedResult = res;
-            matchedConfig = cfg;
-            break;
-        }
+    const logBox = document.getElementById('receiverDebugLog');
+    if (logBox) {
+        const lineElem = document.createElement('div');
+        lineElem.className = `log-entry log-${type}`;
+        lineElem.textContent = entry;
+        logBox.appendChild(lineElem);
+        logBox.scrollTop = logBox.scrollHeight;
     }
+}
 
-    if (decodedResult) {
-        receiverPacketsCaught++;
-        receiverIsLocked = true;
-        receiverLastConfigLabel = `${matchedConfig.label} (${decodedResult.rotationDeg}° rot)`;
-        const { packet } = decodedResult;
-        const { header, payload } = packet;
+function clearReceiverLogs() {
+    receiverLogLines = [];
+    const logBox = document.getElementById('receiverDebugLog');
+    if (logBox) logBox.innerHTML = '<div class="log-entry log-info">[SYSTEM] Logs cleared.</div>';
+}
 
-        if (!inlineDecoder || inlineCurrentFileId !== header.fileId) {
-            inlineCurrentFileId = header.fileId;
-            inlineDecoder = new LTDecoder(header.totalBlocks, header.blockSize, header.totalBlocks * header.blockSize);
-            receiverIsComplete = false;
-        }
+function copyReceiverLogs() {
+    const text = receiverLogLines.map(l => l.text).join('\n');
+    navigator.clipboard.writeText(text).then(() => {
+        alert("📋 Diagnostic logs copied to clipboard!");
+    }).catch(() => {
+        prompt("Copy logs manually:", text);
+    });
+}
 
-        const solved = inlineDecoder.addDroplet(header.seed, payload);
-        updateReceiverProgress(inlineDecoder.getProgress());
+function updateReceiverProgress(ratio, formattedPct, solved, total) {
+    const pct = Math.min(100, Math.max(0, ratio * 100));
+    const bar = document.getElementById('receiverProgressBar');
+    if (bar) bar.style.width = `${pct}%`;
 
-        if (solved && !receiverIsComplete) {
-            receiverIsComplete = true;
-            const fullData = inlineDecoder.reconstructData();
-            if (fullData) {
-                const meta = unpackFileMetadata(fullData);
-                let filename = "chromabeam_received.bin";
-                let filePayload = fullData;
-                if (meta) {
-                    filename = meta.filename;
-                    filePayload = fullData.subarray(meta.metadataHeaderLen, meta.metadataHeaderLen + meta.filesize);
-                }
-                downloadReceivedFile({ filename, payloadBuffer: filePayload.buffer });
-            }
-        }
-    } else {
-        receiverIsLocked = false;
-        receiverCRCErrors++;
+    const lbl = document.getElementById('receiverProgressLabel');
+    if (lbl) lbl.textContent = formattedPct || `${pct.toFixed(4)}%`;
+
+    const blockLbl = document.getElementById('receiverBlockCountLabel');
+    if (blockLbl) {
+        blockLbl.textContent = (total > 0) ? `Solved: ${solved} / ${total} Blocks (${formattedPct})` : "Waiting for first packet...";
     }
-
-    document.getElementById('receiverDropletVal').textContent =
-        `Caught: ${receiverPacketsCaught} (Drops: ${receiverCRCErrors})`;
 }
 
 // ===================== AR VIEWFINDER & 3D RETICLES =====================
@@ -2179,9 +2292,8 @@ function drawViewfinderOverlay(guideRect, quad, isLocked, configLabel, vw, vh) {
         ctx.closePath();
         ctx.stroke();
 
-        // Corner circles & crosshairs
         quad.forEach((pt, i) => {
-            ctx.fillStyle = (i === 0) ? '#ff4444' : (isLocked ? '#00ff66' : '#58a6ff'); // TL anchor red dot
+            ctx.fillStyle = (i === 0) ? '#ff4444' : (isLocked ? '#00ff66' : '#58a6ff');
             ctx.beginPath();
             ctx.arc(pt.x, pt.y, 5, 0, 2 * Math.PI);
             ctx.fill();
@@ -2193,7 +2305,6 @@ function drawViewfinderOverlay(guideRect, quad, isLocked, configLabel, vw, vh) {
             ctx.stroke();
         });
 
-        // Label above quad
         if (configLabel) {
             ctx.fillStyle = isLocked ? '#00ff66' : '#58a6ff';
             ctx.font = 'bold 12px sans-serif';
@@ -2202,19 +2313,10 @@ function drawViewfinderOverlay(guideRect, quad, isLocked, configLabel, vw, vh) {
         }
     }
 
-    // Top instruction label
     ctx.fillStyle = isLocked ? '#00ff66' : '#ffffff';
     ctx.font = '12px sans-serif';
     ctx.textAlign = 'center';
     ctx.fillText(isLocked ? '● OPTICAL LOCK ENGAGED (3D PERSPECTIVE ACTIVE)' : 'Point camera at flashing matrix (Any angle / 360° rotation)', x + w / 2, y - 10);
-}
-
-function updateReceiverProgress(ratio) {
-    const pct = Math.min(100, Math.floor(ratio * 100));
-    const bar = document.getElementById('receiverProgressBar');
-    if (bar) bar.style.width = `${pct}%`;
-    const lbl = document.getElementById('receiverProgressLabel');
-    if (lbl) lbl.textContent = `${pct}%`;
 }
 
 
