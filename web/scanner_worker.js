@@ -48,6 +48,8 @@ let workerCRCErrors = 0;
 let workerIsComplete = false;
 let workerLockedConfig = null;
 let workerFrameCount = 0;
+let workerLastLockedQuad = null;
+let workerLockStreak = 0;
 
 function resetWorkerSession() {
     workerDecoder = null;
@@ -57,6 +59,8 @@ function resetWorkerSession() {
     workerIsComplete = false;
     workerLockedConfig = null;
     workerFrameCount = 0;
+    workerLastLockedQuad = null;
+    workerLockStreak = 0;
 }
 
 function base64ToUint8Array(base64) {
@@ -67,6 +71,35 @@ function base64ToUint8Array(base64) {
             bytes[i] = binaryString.charCodeAt(i);
         }
         return bytes;
+    }
+    return null;
+}
+
+function scanCroppedQR(fullBuffer, imgW, imgH, rx, ry, rw, rh) {
+    rx = Math.max(0, Math.floor(rx));
+    ry = Math.max(0, Math.floor(ry));
+    rw = Math.min(imgW - rx, Math.floor(rw));
+    rh = Math.min(imgH - ry, Math.floor(rh));
+    if (rw < 50 || rh < 50) return null;
+
+    const cropBuf = new Uint8ClampedArray(rw * rh * 4);
+    for (let y = 0; y < rh; y++) {
+        const srcOffset = ((ry + y) * imgW + rx) * 4;
+        const dstOffset = (y * rw) * 4;
+        cropBuf.set(fullBuffer.subarray(srcOffset, srcOffset + rw * 4), dstOffset);
+    }
+
+    const res = jsQR(cropBuf, rw, rh, { inversionAttempts: "attemptBoth" });
+    if (res && res.data) {
+        return {
+            data: res.data,
+            location: {
+                topLeftCorner: { x: res.location.topLeftCorner.x + rx, y: res.location.topLeftCorner.y + ry },
+                topRightCorner: { x: res.location.topRightCorner.x + rx, y: res.location.topRightCorner.y + ry },
+                bottomRightCorner: { x: res.location.bottomRightCorner.x + rx, y: res.location.bottomRightCorner.y + ry },
+                bottomLeftCorner: { x: res.location.bottomLeftCorner.x + rx, y: res.location.bottomLeftCorner.y + ry }
+            }
+        };
     }
     return null;
 }
@@ -128,12 +161,48 @@ self.onmessage = function(e) {
             let lastLumaMetrics = null;
 
             // =========================================================================
-            // PASS 1: High-Speed Standard QR Code Detection (1:1:3:1:1 Finder Pattern)
+            // PASS 1: High-Speed Scandit-Style Multi-Tier QR Detection
             // =========================================================================
             if (typeof jsQR === 'function') {
-                const qrRes = jsQR(imgData.data, width, height, {
-                    inversionAttempts: "attemptBoth"
-                });
+                let qrRes = null;
+
+                // Tier 1: Locked Tracking ROI (Tight 25% padding around last known quad)
+                if (workerLastLockedQuad) {
+                    const xs = workerLastLockedQuad.map(p => p.x);
+                    const ys = workerLastLockedQuad.map(p => p.y);
+                    const minX = Math.min(...xs);
+                    const maxX = Math.max(...xs);
+                    const minY = Math.min(...ys);
+                    const maxY = Math.max(...ys);
+                    const padX = (maxX - minX) * 0.25;
+                    const padY = (maxY - minY) * 0.25;
+
+                    qrRes = scanCroppedQR(
+                        imgData.data, width, height,
+                        minX - padX, minY - padY,
+                        (maxX - minX) + padX * 2, (maxY - minY) + padY * 2
+                    );
+                    if (qrRes) detectMethod = "1:1:3:1:1 QR (Track Lock)";
+                }
+
+                // Tier 2: Viewfinder ROI (The green guide box)
+                if (!qrRes && guideRect && guideRect.w > 50 && guideRect.h > 50) {
+                    const pad = guideRect.w * 0.10;
+                    qrRes = scanCroppedQR(
+                        imgData.data, width, height,
+                        guideRect.x - pad, guideRect.y - pad,
+                        guideRect.w + pad * 2, guideRect.h + pad * 2
+                    );
+                    if (qrRes) detectMethod = "1:1:3:1:1 QR (Viewfinder ROI)";
+                }
+
+                // Tier 3: Full Frame Fallback
+                if (!qrRes) {
+                    qrRes = jsQR(imgData.data, width, height, {
+                        inversionAttempts: "attemptBoth"
+                    });
+                    if (qrRes) detectMethod = "1:1:3:1:1 QR (Full Frame)";
+                }
 
                 if (qrRes && qrRes.data) {
                     try {
@@ -147,20 +216,27 @@ self.onmessage = function(e) {
                                     rotationSteps: 0
                                 };
                                 matchedConfigLabel = "Standard QR (1-bit B&W)";
-                                detectMethod = "1:1:3:1:1 QR Finder";
                                 quad = [
                                     qrRes.location.topLeftCorner,
                                     qrRes.location.topRightCorner,
                                     qrRes.location.bottomRightCorner,
                                     qrRes.location.bottomLeftCorner
                                 ];
+                                workerLastLockedQuad = quad;
+                                workerLockStreak++;
                                 if (verbose) {
                                     log(`[F${frameNum}] 🎯 jsQR locked! Seed #${packet.header.seed} fileId=${packet.header.fileId}`);
                                 }
                             }
                         }
                     } catch (err) {
-                        // Invalid QR payload, fall through to color matrix pass
+                        // Invalid QR payload
+                    }
+                } else {
+                    // Missed frame: degrade lock streak
+                    if (workerLastLockedQuad) {
+                        workerLockStreak--;
+                        if (workerLockStreak <= 0) workerLastLockedQuad = null;
                     }
                 }
             }

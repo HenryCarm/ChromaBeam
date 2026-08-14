@@ -94,7 +94,14 @@ function setSenderPayload(uint8Bytes, filename) {
     fullPayload.set(metaBytes, 0);
     fullPayload.set(senderFileBytes, metaBytes.length);
 
-    const blockSize = Math.max(24, senderLayout.maxPayloadBytes - 16);
+    let blockSize;
+    if (senderColorMode === 0) {
+        if (senderFileBytes.length <= 2048) blockSize = 64;
+        else if (senderFileBytes.length <= 64 * 1024) blockSize = 200;
+        else blockSize = 350;
+    } else {
+        blockSize = Math.max(24, senderLayout.maxPayloadBytes - 16);
+    }
     senderEncoder = new LTEncoder(fullPayload, blockSize);
     senderDropletSeed = 0;
     senderTotalSent = 0;
