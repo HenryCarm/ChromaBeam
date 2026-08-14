@@ -96,7 +96,7 @@
 
                     <div class="control-row">
                         <span id="senderFpsLabel" style="font-size: 13px;">Frame Rate: 15 FPS</span>
-                        <input type="range" id="senderFpsRange" min="10" max="60" value="15" oninput="updateSenderFPS(parseInt(this.value))">
+                        <input type="range" id="senderFpsRange" min="1" max="60" value="15" oninput="updateSenderFPS(parseInt(this.value))">
                     </div>
                 </div>
 
@@ -171,6 +171,7 @@
     <script src="fountain.js"></script>
     <script src="protocol.js"></script>
     <script src="matrix.js"></script>
+    <script src="vision_engine.js"></script>
     <script src="sender.js"></script>
     <script src="receiver.js"></script>
     <script>

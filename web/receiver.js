@@ -1,18 +1,13 @@
 /**
- * ChromaBeam High-Performance Optical Receiver v4
- * 
- * KEY FIX: Within the viewfinder guide, automatically detect the actual matrix
- * bounding box by scanning for the bright white anchor borders. This means the
- * user doesn't need to perfectly fill the guide — just get the matrix roughly
- * inside it and we'll find the exact edges.
+ * ChromaBeam High-Performance Universal Optical Receiver v5
  * 
  * Features:
- * - Auto-crop to actual matrix edges within guide region
- * - 3x3 multi-pixel cell sampling with averaging
- * - Otsu adaptive threshold for B&W
- * - Nearest-neighbor for color modes
- * - Auto-density sweep with config locking
- * - Pre-cached layouts (zero GC per frame)
+ * - Full 3D Perspective Homography Tracking
+ * - 360° 4-Way Rotation Invariance (0°, 90°, 180° upside-down, 270° sideways)
+ * - Multi-Threaded Web Worker Pipeline (60 FPS Butter UI on Main Thread)
+ * - Transferable ArrayBuffers for zero-copy memory transfer
+ * - Adaptive Quad Locking & Telemetry Reticles
+ * - Automatic Offline Fallback
  */
 
 let receiverVideo = null;
@@ -21,31 +16,18 @@ let receiverCtx = null;
 let receiverStream = null;
 let receiverRunning = false;
 
-let receiverDecoder = null;
-let receiverCurrentFileId = null;
+let scannerWorker = null;
+let workerIsBusy = false;
+
 let receiverPacketsCaught = 0;
 let receiverCRCErrors = 0;
 let receiverIsComplete = false;
 let receiverFpsCounter = 0;
 let receiverLastFpsTime = 0;
 let receiverCalculatedFPS = 0;
-let receiverLockedConfig = null;
-
-// Pre-cache ALL candidate layouts at startup
-const CANDIDATE_CONFIGS = [
-    { grid: 32, mode: 0, label: '32×32 B&W' },
-    { grid: 48, mode: 0, label: '48×48 B&W' },
-    { grid: 64, mode: 0, label: '64×64 B&W' },
-    { grid: 32, mode: 1, label: '32×32 4-Color' },
-    { grid: 48, mode: 1, label: '48×48 4-Color' },
-    { grid: 48, mode: 2, label: '48×48 8-Color' },
-    { grid: 64, mode: 2, label: '64×64 8-Color' },
-];
-
-const CACHED_LAYOUTS = {};
-for (const cfg of CANDIDATE_CONFIGS) {
-    CACHED_LAYOUTS[`${cfg.grid}_${cfg.mode}`] = new JSColorMatrixLayout(cfg.grid, cfg.mode);
-}
+let receiverLastQuad = null;
+let receiverLastConfigLabel = '';
+let receiverIsLocked = false;
 
 function initReceiver() {
     receiverVideo = document.getElementById('receiverVideo');
@@ -53,20 +35,44 @@ function initReceiver() {
     if (receiverCanvas) {
         receiverCtx = receiverCanvas.getContext('2d', { willReadFrequently: true });
     }
+    setupScannerWorker();
+}
+
+function setupScannerWorker() {
+    if (window.Worker) {
+        try {
+            scannerWorker = new Worker('scanner_worker.js');
+            scannerWorker.onmessage = handleWorkerMessage;
+            scannerWorker.onerror = function(err) {
+                console.warn("[Receiver] Worker error, fallback to inline:", err);
+                scannerWorker = null;
+            };
+        } catch (e) {
+            console.warn("[Receiver] Could not start Worker, using inline mode:", e);
+            scannerWorker = null;
+        }
+    }
 }
 
 function resetReceiverSession() {
-    receiverDecoder = null;
-    receiverCurrentFileId = null;
     receiverPacketsCaught = 0;
     receiverCRCErrors = 0;
     receiverIsComplete = false;
-    receiverLockedConfig = null;
+    receiverLastQuad = null;
+    receiverIsLocked = false;
+    receiverLastConfigLabel = '';
+    workerIsBusy = false;
     updateReceiverProgress(0);
+
+    if (scannerWorker) {
+        scannerWorker.postMessage({ type: 'reset' });
+    }
 }
 
 async function startReceiverCamera() {
     try {
+        if (!scannerWorker) setupScannerWorker();
+
         const stream = await navigator.mediaDevices.getUserMedia({
             video: {
                 facingMode: { ideal: "environment" },
@@ -85,7 +91,7 @@ async function startReceiverCamera() {
 
         document.getElementById('receiverStartBtn').style.display = 'none';
         document.getElementById('receiverStopBtn').style.display = 'inline-block';
-        document.getElementById('receiverStatusBadge').textContent = "● SCANNING";
+        document.getElementById('receiverStatusBadge').textContent = "● SCANNING (360° 3D Active)";
         document.getElementById('receiverStatusBadge').className = "badge-scanning";
 
         requestAnimationFrame(processReceiverFrame);
@@ -112,7 +118,7 @@ function stopReceiverCamera() {
     document.getElementById('receiverStatusBadge').className = "badge-idle";
 }
 
-// ===================== MAIN FRAME LOOP =====================
+// ===================== MAIN UI 60 FPS LOOP =====================
 
 function processReceiverFrame() {
     if (!receiverRunning || receiverIsComplete) return;
@@ -135,380 +141,84 @@ function processReceiverFrame() {
             receiverCanvas.height = vh;
         }
 
+        // Draw camera frame directly to canvas
         receiverCtx.drawImage(receiverVideo, 0, 0, vw, vh);
-        const fullImgData = receiverCtx.getImageData(0, 0, vw, vh);
 
-        // Step 1: Define a generous guide region (center 85%)
+        // Guide bounds
         const guideSide = Math.min(vw, vh) * 0.85;
         const gx = Math.floor((vw - guideSide) / 2);
         const gy = Math.floor((vh - guideSide) / 2);
         const gw = Math.floor(guideSide);
         const gh = Math.floor(guideSide);
+        const guideRect = { x: gx, y: gy, w: gw, h: gh };
 
-        // Step 2: Within the guide, auto-detect the actual matrix bounding box
-        const matrixRect = detectMatrixBounds(fullImgData, vw, vh, gx, gy, gw, gh);
+        // Draw augmented reality viewfinder guide & 3D quad reticles
+        drawViewfinderOverlay(guideRect, receiverLastQuad, receiverIsLocked, receiverLastConfigLabel, vw, vh);
 
-        // Step 3: Draw viewfinder and detected bounds
-        drawViewfinder(gx, gy, gw, gh, matrixRect, vw, vh);
+        // Dispatch frame to Background Web Worker if idle
+        if (!workerIsBusy && !receiverIsComplete) {
+            const imgData = receiverCtx.getImageData(0, 0, vw, vh);
+            const buffer = imgData.data.buffer; // Transferable
 
-        // Step 4: Sample and decode from the detected matrix region
-        let decodedPacket = null;
-        let matchedLabel = '';
-
-        if (matrixRect && matrixRect.w > 30 && matrixRect.h > 30) {
-            const mImgData = receiverCtx.getImageData(matrixRect.x, matrixRect.y, matrixRect.w, matrixRect.h);
-
-            if (receiverLockedConfig) {
-                const key = `${receiverLockedConfig.grid}_${receiverLockedConfig.mode}`;
-                const layout = CACHED_LAYOUTS[key];
-                const grid = sampleGrid(mImgData, matrixRect.w, matrixRect.h, layout);
-                const bytes = gridIndicesToBytes(grid, layout);
-                decodedPacket = unpackPacket(bytes);
-                if (decodedPacket) {
-                    matchedLabel = receiverLockedConfig.label;
-                } else {
-                    receiverLockedConfig = null; // lost lock
-                }
-            }
-
-            if (!decodedPacket) {
-                for (const cfg of CANDIDATE_CONFIGS) {
-                    const key = `${cfg.grid}_${cfg.mode}`;
-                    const layout = CACHED_LAYOUTS[key];
-                    const grid = sampleGrid(mImgData, matrixRect.w, matrixRect.h, layout);
-                    const bytes = gridIndicesToBytes(grid, layout);
-                    const pkt = unpackPacket(bytes);
-                    if (pkt) {
-                        decodedPacket = pkt;
-                        matchedLabel = cfg.label;
-                        receiverLockedConfig = cfg;
-                        break;
-                    }
-                }
+            if (scannerWorker) {
+                workerIsBusy = true;
+                scannerWorker.postMessage({
+                    type: 'processFrame',
+                    buffer,
+                    width: vw,
+                    height: vh,
+                    guideRect
+                }, [buffer]);
+            } else {
+                // Inline synchronous fallback if worker unavailable
+                processFrameInline(imgData, vw, vh, guideRect);
             }
         }
-
-        if (decodedPacket) {
-            receiverPacketsCaught++;
-            document.getElementById('receiverStatusBadge').textContent = `● LOCKED: ${matchedLabel}`;
-            document.getElementById('receiverStatusBadge').className = "badge-locked";
-
-            const { header, payload } = decodedPacket;
-
-            if (!receiverDecoder || receiverCurrentFileId !== header.fileId) {
-                receiverCurrentFileId = header.fileId;
-                receiverDecoder = new LTDecoder(header.totalBlocks, header.blockSize, header.totalBlocks * header.blockSize);
-                receiverIsComplete = false;
-            }
-
-            const solved = receiverDecoder.addDroplet(header.seed, payload);
-            updateReceiverProgress(receiverDecoder.getProgress());
-
-            if (solved && !receiverIsComplete) {
-                receiverIsComplete = true;
-                onFileTransferComplete();
-            }
-        } else {
-            receiverCRCErrors++;
-            document.getElementById('receiverStatusBadge').textContent = "● SCANNING (point at matrix)";
-            document.getElementById('receiverStatusBadge').className = "badge-scanning";
-        }
-
-        document.getElementById('receiverDropletVal').textContent =
-            `Caught: ${receiverPacketsCaught} (Drops: ${receiverCRCErrors})`;
     }
 
     requestAnimationFrame(processReceiverFrame);
 }
 
-// ===================== MATRIX BOUNDARY DETECTION =====================
+// ===================== WORKER MESSAGE HANDLER =====================
 
-/**
- * Within the guide region, finds the actual matrix bounding box by scanning
- * for rows and columns containing bright pixels (the white anchor borders).
- * 
- * This is WAY simpler and more robust than trying to find individual corners.
- * The matrix has bright white borders on all 4 sides (the anchor patterns),
- * so we just need to find where the bright stuff starts and ends.
- */
-function detectMatrixBounds(imgData, imgW, imgH, gx, gy, gw, gh) {
-    const data = imgData.data;
-    const BRIGHT_THRESHOLD = 160; // Pixel is considered "bright" if luma > this
-    const MIN_BRIGHT_PIXELS = 3;  // Minimum bright pixels in a row/col to count
+function handleWorkerMessage(e) {
+    workerIsBusy = false;
+    const res = e.data;
+    if (!res || !receiverRunning) return;
 
-    let topEdge = -1, bottomEdge = -1, leftEdge = -1, rightEdge = -1;
+    receiverPacketsCaught = res.caught || 0;
+    receiverCRCErrors = res.drops || 0;
+    receiverIsLocked = res.locked;
+    if (res.quad) receiverLastQuad = res.quad;
+    if (res.configLabel) receiverLastConfigLabel = res.configLabel;
 
-    // Scan rows top→bottom to find top edge
-    for (let y = gy; y < gy + gh; y++) {
-        let brightCount = 0;
-        for (let x = gx; x < gx + gw; x += 3) { // sparse scan for speed
-            const idx = (y * imgW + x) * 4;
-            const luma = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
-            if (luma > BRIGHT_THRESHOLD) brightCount++;
-        }
-        if (brightCount >= MIN_BRIGHT_PIXELS) {
-            topEdge = y;
-            break;
-        }
+    updateReceiverProgress(res.progress || 0);
+
+    const badge = document.getElementById('receiverStatusBadge');
+    if (res.locked) {
+        badge.textContent = `● LOCKED: ${receiverLastConfigLabel}`;
+        badge.className = "badge-locked";
+    } else {
+        badge.textContent = "● SCANNING (360° 3D Active)";
+        badge.className = "badge-scanning";
     }
 
-    // Scan rows bottom→top to find bottom edge
-    for (let y = gy + gh - 1; y >= gy; y--) {
-        let brightCount = 0;
-        for (let x = gx; x < gx + gw; x += 3) {
-            const idx = (y * imgW + x) * 4;
-            const luma = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
-            if (luma > BRIGHT_THRESHOLD) brightCount++;
-        }
-        if (brightCount >= MIN_BRIGHT_PIXELS) {
-            bottomEdge = y;
-            break;
-        }
+    document.getElementById('receiverDropletVal').textContent =
+        `Caught: ${receiverPacketsCaught} (Drops: ${receiverCRCErrors})`;
+
+    if (res.isComplete && res.fileResult && !receiverIsComplete) {
+        receiverIsComplete = true;
+        downloadReceivedFile(res.fileResult);
     }
-
-    // Scan columns left→right to find left edge
-    for (let x = gx; x < gx + gw; x++) {
-        let brightCount = 0;
-        for (let y = gy; y < gy + gh; y += 3) {
-            const idx = (y * imgW + x) * 4;
-            const luma = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
-            if (luma > BRIGHT_THRESHOLD) brightCount++;
-        }
-        if (brightCount >= MIN_BRIGHT_PIXELS) {
-            leftEdge = x;
-            break;
-        }
-    }
-
-    // Scan columns right→left to find right edge
-    for (let x = gx + gw - 1; x >= gx; x--) {
-        let brightCount = 0;
-        for (let y = gy; y < gy + gh; y += 3) {
-            const idx = (y * imgW + x) * 4;
-            const luma = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
-            if (luma > BRIGHT_THRESHOLD) brightCount++;
-        }
-        if (brightCount >= MIN_BRIGHT_PIXELS) {
-            rightEdge = x;
-            break;
-        }
-    }
-
-    if (topEdge < 0 || bottomEdge < 0 || leftEdge < 0 || rightEdge < 0) return null;
-    if (rightEdge <= leftEdge || bottomEdge <= topEdge) return null;
-
-    // Make it square (the matrix is always square)
-    let w = rightEdge - leftEdge;
-    let h = bottomEdge - topEdge;
-    const side = Math.min(w, h);
-
-    // Center the square within the detected bounds
-    const cx = leftEdge + w / 2;
-    const cy = topEdge + h / 2;
-
-    return {
-        x: Math.floor(cx - side / 2),
-        y: Math.floor(cy - side / 2),
-        w: Math.floor(side),
-        h: Math.floor(side)
-    };
 }
 
-// ===================== GRID SAMPLING =====================
-
-/**
- * Samples the grid from a cropped matrix region.
- * Uses 3x3 multi-pixel averaging and Otsu threshold for B&W.
- */
-function sampleGrid(imgData, regionW, regionH, layout) {
-    const N = layout.gridSize;
-    const grid2D = Array.from({ length: N }, () => new Uint8Array(N));
-    const data = imgData.data;
-    const colorMode = layout.colorMode;
-    const cellW = regionW / N;
-    const cellH = regionH / N;
-    const palette = layout.palette;
-
-    // Otsu threshold for B&W
-    let lumaThreshold = 128;
-    if (colorMode === 0) {
-        lumaThreshold = computeOtsuThreshold(data, regionW, regionH);
-    }
-
-    for (let r = 0; r < N; r++) {
-        for (let c = 0; c < N; c++) {
-            const centerX = (c + 0.5) * cellW;
-            const centerY = (r + 0.5) * cellH;
-
-            // 3x3 kernel sampling at cell center ± 20% of cell size
-            let avgR = 0, avgG = 0, avgB = 0, count = 0;
-            const offsets = [-0.2, 0, 0.2];
-
-            for (const dy of offsets) {
-                for (const dx of offsets) {
-                    const px = Math.floor(centerX + dx * cellW);
-                    const py = Math.floor(centerY + dy * cellH);
-                    if (px >= 0 && px < regionW && py >= 0 && py < regionH) {
-                        const idx = (py * regionW + px) * 4;
-                        avgR += data[idx];
-                        avgG += data[idx + 1];
-                        avgB += data[idx + 2];
-                        count++;
-                    }
-                }
-            }
-
-            if (count > 0) {
-                avgR /= count;
-                avgG /= count;
-                avgB /= count;
-            }
-
-            if (colorMode === 0) {
-                const luma = 0.299 * avgR + 0.587 * avgG + 0.114 * avgB;
-                grid2D[r][c] = (luma > lumaThreshold) ? 1 : 0;
-            } else {
-                let bestIdx = 0;
-                let minDist = Infinity;
-                for (let k = 0; k < palette.length; k++) {
-                    const [pr, pg, pb] = palette[k];
-                    const dist = (avgR - pr) ** 2 + (avgG - pg) ** 2 + (avgB - pb) ** 2;
-                    if (dist < minDist) {
-                        minDist = dist;
-                        bestIdx = k;
-                    }
-                }
-                grid2D[r][c] = bestIdx;
-            }
-        }
-    }
-
-    return grid2D;
-}
-
-function computeOtsuThreshold(data, w, h) {
-    const step = Math.max(1, Math.floor((w * h) / 400));
-    const histogram = new Uint32Array(256);
-    let sampleCount = 0;
-
-    for (let i = 0; i < w * h; i += step) {
-        const idx = i * 4;
-        if (idx + 2 < data.length) {
-            const luma = Math.floor(0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2]);
-            histogram[Math.min(255, luma)]++;
-            sampleCount++;
-        }
-    }
-
-    let sumTotal = 0;
-    for (let i = 0; i < 256; i++) sumTotal += i * histogram[i];
-
-    let sumBg = 0, weightBg = 0, maxVariance = 0, threshold = 128;
-
-    for (let t = 0; t < 256; t++) {
-        weightBg += histogram[t];
-        if (weightBg === 0) continue;
-        const weightFg = sampleCount - weightBg;
-        if (weightFg === 0) break;
-
-        sumBg += t * histogram[t];
-        const meanBg = sumBg / weightBg;
-        const meanFg = (sumTotal - sumBg) / weightFg;
-        const variance = weightBg * weightFg * (meanBg - meanFg) ** 2;
-
-        if (variance > maxVariance) {
-            maxVariance = variance;
-            threshold = t;
-        }
-    }
-
-    return threshold;
-}
-
-// ===================== VIEWFINDER UI =====================
-
-function drawViewfinder(gx, gy, gw, gh, matrixRect, vw, vh) {
-    const ctx = receiverCtx;
-    const bracketLen = Math.min(gw, gh) * 0.06;
-
-    // Dim overlay outside guide
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
-    ctx.fillRect(0, 0, vw, gy);
-    ctx.fillRect(0, gy + gh, vw, vh - gy - gh);
-    ctx.fillRect(0, gy, gx, gh);
-    ctx.fillRect(gx + gw, gy, vw - gx - gw, gh);
-
-    // Guide corner brackets (green)
-    ctx.strokeStyle = '#00ff66';
-    ctx.lineWidth = 2;
-    ctx.lineCap = 'round';
-
-    // TL
-    ctx.beginPath();
-    ctx.moveTo(gx, gy + bracketLen); ctx.lineTo(gx, gy); ctx.lineTo(gx + bracketLen, gy);
-    ctx.stroke();
-    // TR
-    ctx.beginPath();
-    ctx.moveTo(gx + gw - bracketLen, gy); ctx.lineTo(gx + gw, gy); ctx.lineTo(gx + gw, gy + bracketLen);
-    ctx.stroke();
-    // BR
-    ctx.beginPath();
-    ctx.moveTo(gx + gw, gy + gh - bracketLen); ctx.lineTo(gx + gw, gy + gh); ctx.lineTo(gx + gw - bracketLen, gy + gh);
-    ctx.stroke();
-    // BL
-    ctx.beginPath();
-    ctx.moveTo(gx + bracketLen, gy + gh); ctx.lineTo(gx, gy + gh); ctx.lineTo(gx, gy + gh - bracketLen);
-    ctx.stroke();
-
-    // If matrix detected, draw tight blue rect around it
-    if (matrixRect) {
-        ctx.strokeStyle = '#58a6ff';
-        ctx.lineWidth = 2;
-        ctx.strokeRect(matrixRect.x, matrixRect.y, matrixRect.w, matrixRect.h);
-
-        // Fill percentage indicator
-        const fillPct = Math.floor((matrixRect.w * matrixRect.h) / (gw * gh) * 100);
-        ctx.fillStyle = '#58a6ff';
-        ctx.font = 'bold 13px sans-serif';
-        ctx.textAlign = 'left';
-        ctx.fillText(`Matrix: ${matrixRect.w}×${matrixRect.h}px (${fillPct}% fill)`, matrixRect.x, matrixRect.y - 6);
-    }
-
-    // Top label
-    ctx.fillStyle = '#00ff66';
-    ctx.font = '11px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText('Point camera at the flashing matrix', gx + gw / 2, gy - 6);
-}
-
-// ===================== PROGRESS & COMPLETION =====================
-
-function updateReceiverProgress(ratio) {
-    const pct = Math.min(100, Math.floor(ratio * 100));
-    const bar = document.getElementById('receiverProgressBar');
-    if (bar) bar.style.width = `${pct}%`;
-    const lbl = document.getElementById('receiverProgressLabel');
-    if (lbl) lbl.textContent = `${pct}%`;
-}
-
-function onFileTransferComplete() {
+function downloadReceivedFile(fileResult) {
     updateReceiverProgress(1.0);
     document.getElementById('receiverStatusBadge').textContent = "★ TRANSFER COMPLETE!";
     document.getElementById('receiverStatusBadge').className = "badge-complete";
 
-    const fullData = receiverDecoder.reconstructData();
-    if (!fullData) return;
-
-    const meta = unpackFileMetadata(fullData);
-    let filename = "chromabeam_received.bin";
-    let filePayload = fullData;
-
-    if (meta) {
-        filename = meta.filename;
-        filePayload = fullData.subarray(meta.metadataHeaderLen, meta.metadataHeaderLen + meta.filesize);
-    }
-
-    const blob = new Blob([filePayload], { type: 'application/octet-stream' });
+    const { filename, payloadBuffer } = fileResult;
+    const blob = new Blob([payloadBuffer], { type: 'application/octet-stream' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -518,5 +228,157 @@ function onFileTransferComplete() {
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
 
-    alert(`🎉 Received: ${filename} (${(filePayload.length / 1024).toFixed(1)} KB)`);
+    alert(`🎉 Success! Received file: ${filename} (${(payloadBuffer.byteLength / 1024).toFixed(1)} KB)`);
+}
+
+// ===================== INLINE FALLBACK ENGINE =====================
+
+let inlineDecoder = null;
+let inlineCurrentFileId = null;
+let inlineLockedConfig = null;
+
+function processFrameInline(imgData, vw, vh, guideRect) {
+    const quad = detectOpticalQuad(imgData, vw, vh, guideRect);
+    if (!quad) return;
+
+    receiverLastQuad = quad;
+    let decodedResult = null;
+    let matchedConfig = null;
+
+    const candidateConfigs = [
+        { grid: 32, mode: 0, label: '32×32 B&W (Potato)' },
+        { grid: 48, mode: 0, label: '48×48 B&W' },
+        { grid: 64, mode: 0, label: '64×64 B&W' },
+        { grid: 32, mode: 1, label: '32×32 4-Color' },
+        { grid: 48, mode: 1, label: '48×48 4-Color' },
+        { grid: 48, mode: 2, label: '48×48 8-Color' },
+        { grid: 64, mode: 2, label: '64×64 8-Color' },
+    ];
+
+    for (const cfg of candidateConfigs) {
+        const layout = new JSColorMatrixLayout(cfg.grid, cfg.mode);
+        const sampledGrid = sampleQuadGrid(imgData, vw, vh, quad, layout);
+        const res = decodeGridMultiOrientation(sampledGrid, layout);
+        if (res) {
+            decodedResult = res;
+            matchedConfig = cfg;
+            break;
+        }
+    }
+
+    if (decodedResult) {
+        receiverPacketsCaught++;
+        receiverIsLocked = true;
+        receiverLastConfigLabel = `${matchedConfig.label} (${decodedResult.rotationDeg}° rot)`;
+        const { packet } = decodedResult;
+        const { header, payload } = packet;
+
+        if (!inlineDecoder || inlineCurrentFileId !== header.fileId) {
+            inlineCurrentFileId = header.fileId;
+            inlineDecoder = new LTDecoder(header.totalBlocks, header.blockSize, header.totalBlocks * header.blockSize);
+            receiverIsComplete = false;
+        }
+
+        const solved = inlineDecoder.addDroplet(header.seed, payload);
+        updateReceiverProgress(inlineDecoder.getProgress());
+
+        if (solved && !receiverIsComplete) {
+            receiverIsComplete = true;
+            const fullData = inlineDecoder.reconstructData();
+            if (fullData) {
+                const meta = unpackFileMetadata(fullData);
+                let filename = "chromabeam_received.bin";
+                let filePayload = fullData;
+                if (meta) {
+                    filename = meta.filename;
+                    filePayload = fullData.subarray(meta.metadataHeaderLen, meta.metadataHeaderLen + meta.filesize);
+                }
+                downloadReceivedFile({ filename, payloadBuffer: filePayload.buffer });
+            }
+        }
+    } else {
+        receiverIsLocked = false;
+        receiverCRCErrors++;
+    }
+
+    document.getElementById('receiverDropletVal').textContent =
+        `Caught: ${receiverPacketsCaught} (Drops: ${receiverCRCErrors})`;
+}
+
+// ===================== AR VIEWFINDER & 3D RETICLES =====================
+
+function drawViewfinderOverlay(guideRect, quad, isLocked, configLabel, vw, vh) {
+    const ctx = receiverCtx;
+    const { x, y, w, h } = guideRect;
+    const bracketLen = Math.min(w, h) * 0.08;
+
+    // Semi-transparent outer mask
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.35)';
+    ctx.fillRect(0, 0, vw, y);
+    ctx.fillRect(0, y + h, vw, vh - y - h);
+    ctx.fillRect(0, y, x, h);
+    ctx.fillRect(x + w, y, vw - x - w, h);
+
+    // Guide brackets
+    ctx.strokeStyle = isLocked ? '#00ff66' : 'rgba(0, 255, 102, 0.5)';
+    ctx.lineWidth = 2.5;
+    ctx.lineCap = 'round';
+
+    // 4 Corner brackets
+    ctx.beginPath();
+    ctx.moveTo(x, y + bracketLen); ctx.lineTo(x, y); ctx.lineTo(x + bracketLen, y);
+    ctx.moveTo(x + w - bracketLen, y); ctx.lineTo(x + w, y); ctx.lineTo(x + w, y + bracketLen);
+    ctx.moveTo(x + w, y + h - bracketLen); ctx.lineTo(x + w, y + h); ctx.lineTo(x + w - bracketLen, y + h);
+    ctx.moveTo(x + bracketLen, y + h); ctx.lineTo(x, y + h); ctx.lineTo(x, y + h - bracketLen);
+    ctx.stroke();
+
+    // Draw full 3D perspective quad if detected
+    if (quad && quad.length === 4) {
+        ctx.strokeStyle = isLocked ? '#00ff66' : '#58a6ff';
+        ctx.lineWidth = isLocked ? 3.0 : 2.0;
+
+        ctx.beginPath();
+        ctx.moveTo(quad[0].x, quad[0].y);
+        ctx.lineTo(quad[1].x, quad[1].y);
+        ctx.lineTo(quad[2].x, quad[2].y);
+        ctx.lineTo(quad[3].x, quad[3].y);
+        ctx.closePath();
+        ctx.stroke();
+
+        // Corner circles & crosshairs
+        quad.forEach((pt, i) => {
+            ctx.fillStyle = (i === 0) ? '#ff4444' : (isLocked ? '#00ff66' : '#58a6ff'); // TL anchor red dot
+            ctx.beginPath();
+            ctx.arc(pt.x, pt.y, 5, 0, 2 * Math.PI);
+            ctx.fill();
+
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.arc(pt.x, pt.y, 10, 0, 2 * Math.PI);
+            ctx.stroke();
+        });
+
+        // Label above quad
+        if (configLabel) {
+            ctx.fillStyle = isLocked ? '#00ff66' : '#58a6ff';
+            ctx.font = 'bold 12px sans-serif';
+            ctx.textAlign = 'left';
+            ctx.fillText(`⚡ ${configLabel}`, quad[0].x, Math.max(16, quad[0].y - 12));
+        }
+    }
+
+    // Top instruction label
+    ctx.fillStyle = isLocked ? '#00ff66' : '#ffffff';
+    ctx.font = '12px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(isLocked ? '● OPTICAL LOCK ENGAGED (3D PERSPECTIVE ACTIVE)' : 'Point camera at flashing matrix (Any angle / 360° rotation)', x + w / 2, y - 10);
+}
+
+function updateReceiverProgress(ratio) {
+    const pct = Math.min(100, Math.floor(ratio * 100));
+    const bar = document.getElementById('receiverProgressBar');
+    if (bar) bar.style.width = `${pct}%`;
+    const lbl = document.getElementById('receiverProgressLabel');
+    if (lbl) lbl.textContent = `${pct}%`;
 }
