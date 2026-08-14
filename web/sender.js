@@ -72,7 +72,7 @@ function toggleProMode() {
     const proSection = document.getElementById('senderProSection');
     if (proSection) {
         const isHidden = proSection.style.display === 'none';
-        proSection.style.display = isHidden ? 'block' : 'none';
+        proSection.style.display = isHidden ? 'flex' : 'none';
         document.getElementById('proToggleBtn').textContent = isHidden ? "▲ Hide Advanced Settings" : "⚙️ Advanced Settings (Pro)";
     }
 }

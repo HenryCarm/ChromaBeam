@@ -460,7 +460,7 @@ select, input[type="range"] {
                     <button id="proToggleBtn" class="btn btn-secondary" onclick="toggleProMode()" style="font-size: 12px; padding: 6px 14px;">⚙️ Advanced Settings (Pro)</button>
                 </div>
 
-                <div id="senderProSection" style="display: none; display: flex; flex-direction: column; gap: 12px; border-top: 1px solid var(--card-border); padding-top: 12px;">
+                <div id="senderProSection" style="display: none; flex-direction: column; gap: 12px; border-top: 1px solid var(--card-border); padding-top: 12px;">
                     <div class="control-row">
                         <label for="senderModeSelect" style="font-size: 13px;">Color Depth:</label>
                         <select id="senderModeSelect" onchange="updateSenderColorMode(parseInt(this.value))">
@@ -542,9 +542,10 @@ select, input[type="range"] {
                 <div class="metric-box" style="margin-top: 10px;">
                     <div class="metric-label" style="margin-bottom: 6px;">How to Scan</div>
                     <ul style="font-size: 12px; color: var(--text-secondary); padding-left: 18px; line-height: 1.6;">
-                        <li>Fit the flashing matrix roughly inside the green target box.</li>
-                        <li>ChromaBeam will <b>auto-detect the density and color mode</b> automatically!</li>
-                        <li>When full file is assembled, it will automatically download!</li>
+                        <li><b>Fill the green bracket guide</b> with the flashing matrix on your screen.</li>
+                        <li>Hold steady — ChromaBeam <b>auto-detects grid size and color mode</b>!</li>
+                        <li>Once the progress bar hits 100%, the file downloads automatically!</li>
+                        <li>Tip: Use <b>🛡️ Potato Camera (B&W)</b> preset on the sender for best reliability.</li>
                     </ul>
                 </div>
             </div>
@@ -1172,7 +1173,7 @@ function toggleProMode() {
     const proSection = document.getElementById('senderProSection');
     if (proSection) {
         const isHidden = proSection.style.display === 'none';
-        proSection.style.display = isHidden ? 'block' : 'none';
+        proSection.style.display = isHidden ? 'flex' : 'none';
         document.getElementById('proToggleBtn').textContent = isHidden ? "▲ Hide Advanced Settings" : "⚙️ Advanced Settings (Pro)";
     }
 }
@@ -1353,39 +1354,53 @@ function toggleSenderFullscreen() {
 
 /* --- receiver.js --- */
 /**
- * ChromaBeam High-Performance Universal Optical Receiver
- * Supports Auto-Density, 1-bit Monochrome, 2-bit 4-Color, and 3-bit 8-Color JAB decoding.
+ * ChromaBeam High-Performance Universal Optical Receiver v3
+ * 
+ * APPROACH: Fixed centered viewfinder guide. User positions the flashing matrix
+ * to fill the guide. No fragile auto-corner-detection needed.
+ * 
+ * Features:
+ * - Fixed viewfinder guide with clear corner brackets
+ * - Multi-pixel cell sampling (3x3 kernel) for noise resilience
+ * - Otsu adaptive threshold for B&W mode
+ * - Euclidean nearest-neighbor for color modes with 5-point calibration
+ * - Auto-density sweep across all 6 mode/grid combinations
+ * - Pre-cached layouts to avoid GC thrashing on mobile
  */
 
-let receiverGridSize = 32; // Default to 32 for potato / high reliability
-let receiverColorMode = 0; // Default to 0 (B&W)
-let receiverLayout = new JSColorMatrixLayout(receiverGridSize, receiverColorMode);
-let receiverDecoder = null;
-let receiverCurrentFileId = null;
 let receiverVideo = null;
 let receiverCanvas = null;
 let receiverCtx = null;
 let receiverStream = null;
 let receiverRunning = false;
 
+let receiverDecoder = null;
+let receiverCurrentFileId = null;
 let receiverPacketsCaught = 0;
 let receiverCRCErrors = 0;
 let receiverIsComplete = false;
 let receiverFpsCounter = 0;
 let receiverLastFpsTime = 0;
 let receiverCalculatedFPS = 0;
+let receiverLockedConfig = null; // Once we catch a valid packet, lock to that config
 
-// Dynamic calibrated color vectors in RGB [0..255]
-let calibratedPalette = [
-    [10, 10, 10],      // 000: Black
-    [40, 60, 220],     // 001: Blue
-    [40, 200, 60],     // 010: Green
-    [40, 210, 220],    // 011: Cyan
-    [220, 40, 40],     // 100: Red
-    [220, 50, 220],    // 101: Magenta
-    [220, 210, 40],    // 110: Yellow
-    [240, 240, 240]    // 111: White
+// Pre-cache ALL candidate layouts at startup to avoid per-frame allocation
+const CANDIDATE_CONFIGS = [
+    { grid: 32, mode: 0, label: '32x32 B&W' },
+    { grid: 32, mode: 1, label: '32x32 4-Color' },
+    { grid: 48, mode: 0, label: '48x48 B&W' },
+    { grid: 48, mode: 1, label: '48x48 4-Color' },
+    { grid: 48, mode: 2, label: '48x48 8-Color' },
+    { grid: 64, mode: 0, label: '64x64 B&W' },
+    { grid: 64, mode: 1, label: '64x64 4-Color' },
+    { grid: 64, mode: 2, label: '64x64 8-Color' },
 ];
+
+const CACHED_LAYOUTS = {};
+for (const cfg of CANDIDATE_CONFIGS) {
+    const key = `${cfg.grid}_${cfg.mode}`;
+    CACHED_LAYOUTS[key] = new JSColorMatrixLayout(cfg.grid, cfg.mode);
+}
 
 function initReceiver() {
     receiverVideo = document.getElementById('receiverVideo');
@@ -1395,44 +1410,13 @@ function initReceiver() {
     }
 }
 
-function updateReceiverPreset(presetName) {
-    if (presetName === 'potato') {
-        receiverColorMode = 0;
-        receiverGridSize = 32;
-    } else if (presetName === 'balanced') {
-        receiverColorMode = 1;
-        receiverGridSize = 48;
-    } else if (presetName === 'turbo') {
-        receiverColorMode = 2;
-        receiverGridSize = 64;
-    }
-    receiverLayout = new JSColorMatrixLayout(receiverGridSize, receiverColorMode);
-    receiverDecoder = null;
-    receiverCurrentFileId = null;
-    receiverPacketsCaught = 0;
-    receiverCRCErrors = 0;
-    receiverIsComplete = false;
-    updateReceiverProgress(0);
-}
-
-function updateReceiverGridDensity(size) {
-    receiverGridSize = size;
-    receiverLayout = new JSColorMatrixLayout(receiverGridSize, receiverColorMode);
-    resetReceiverSession();
-}
-
-function updateReceiverColorMode(mode) {
-    receiverColorMode = mode;
-    receiverLayout = new JSColorMatrixLayout(receiverGridSize, receiverColorMode);
-    resetReceiverSession();
-}
-
 function resetReceiverSession() {
     receiverDecoder = null;
     receiverCurrentFileId = null;
     receiverPacketsCaught = 0;
     receiverCRCErrors = 0;
     receiverIsComplete = false;
+    receiverLockedConfig = null;
     updateReceiverProgress(0);
 }
 
@@ -1440,18 +1424,16 @@ async function getCameraStream(constraints) {
     if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
         return await navigator.mediaDevices.getUserMedia(constraints);
     }
-    const legacyGetUserMedia = navigator.getUserMedia || navigator.webkitGetUserMedia || navigator.mozGetUserMedia || navigator.msGetUserMedia;
-    if (legacyGetUserMedia) {
-        return new Promise((resolve, reject) => {
-            legacyGetUserMedia.call(navigator, constraints, resolve, reject);
-        });
+    const legacy = navigator.getUserMedia || navigator.webkitGetUserMedia || navigator.mozGetUserMedia;
+    if (legacy) {
+        return new Promise((resolve, reject) => legacy.call(navigator, constraints, resolve, reject));
     }
     throw new Error("INSECURE_CONTEXT_OR_UNSUPPORTED");
 }
 
 async function startReceiverCamera() {
     try {
-        const constraints = {
+        receiverStream = await getCameraStream({
             video: {
                 facingMode: { ideal: "environment" },
                 width: { ideal: 1280 },
@@ -1459,9 +1441,7 @@ async function startReceiverCamera() {
                 frameRate: { ideal: 60 }
             },
             audio: false
-        };
-
-        receiverStream = await getCameraStream(constraints);
+        });
         receiverVideo.srcObject = receiverStream;
         await receiverVideo.play();
 
@@ -1470,29 +1450,25 @@ async function startReceiverCamera() {
 
         document.getElementById('receiverStartBtn').style.display = 'none';
         document.getElementById('receiverStopBtn').style.display = 'inline-block';
-        document.getElementById('receiverStatusBadge').textContent = "● SCANNING FOR OPTICAL BEAM";
+        document.getElementById('receiverStatusBadge').textContent = "● SCANNING";
         document.getElementById('receiverStatusBadge').className = "badge-scanning";
 
         requestAnimationFrame(processReceiverFrame);
     } catch (err) {
         if (err.message === "INSECURE_CONTEXT_OR_UNSUPPORTED" || err.name === "TypeError") {
             const httpsUrl = `https://${location.hostname}:8443/`;
-            const msg = `⚠️ Camera Blocked by Browser Security Policy!\n\nModern mobile browsers require HTTPS for camera access.\n\n👉 Open via HTTPS:\n${httpsUrl}\n\n(Tap 'Advanced' -> 'Proceed' if prompted).`;
-            alert(msg);
-            if (confirm("Redirect to HTTPS now?")) {
-                window.location.href = httpsUrl;
-            }
+            alert(`⚠️ Camera requires HTTPS!\n\nOpen: ${httpsUrl}\n(Tap Advanced → Proceed if prompted)`);
+            if (confirm("Redirect to HTTPS?")) window.location.href = httpsUrl;
         } else {
-            alert("Camera Access Error: " + err.message);
+            alert("Camera error: " + err.message);
         }
-        console.error("Camera error:", err);
     }
 }
 
 function stopReceiverCamera() {
     receiverRunning = false;
     if (receiverStream) {
-        receiverStream.getTracks().forEach(track => track.stop());
+        receiverStream.getTracks().forEach(t => t.stop());
         receiverStream = null;
     }
     document.getElementById('receiverStartBtn').style.display = 'inline-block';
@@ -1501,9 +1477,12 @@ function stopReceiverCamera() {
     document.getElementById('receiverStatusBadge').className = "badge-idle";
 }
 
-function processReceiverFrame() {
-    if (!receiverRunning) return;
+// ===================== MAIN FRAME LOOP =====================
 
+function processReceiverFrame() {
+    if (!receiverRunning || receiverIsComplete) return;
+
+    // FPS counter
     receiverFpsCounter++;
     const now = performance.now();
     if (now - receiverLastFpsTime >= 1000) {
@@ -1513,7 +1492,7 @@ function processReceiverFrame() {
         document.getElementById('receiverFpsVal').textContent = `${receiverCalculatedFPS} FPS`;
     }
 
-    if (receiverVideo.readyState === receiverVideo.HAVE_ENOUGH_DATA) {
+    if (receiverVideo.readyState >= receiverVideo.HAVE_ENOUGH_DATA) {
         const vw = receiverVideo.videoWidth;
         const vh = receiverVideo.videoHeight;
 
@@ -1523,251 +1502,163 @@ function processReceiverFrame() {
         }
 
         receiverCtx.drawImage(receiverVideo, 0, 0, vw, vh);
-        const imgData = receiverCtx.getImageData(0, 0, vw, vh);
 
-        // 1. Locate the optical matrix using concentric square finder pattern detection
-        const quad = detectMatrixCorners(imgData, vw, vh);
+        // Fixed centered square viewfinder guide (user fills this with the matrix)
+        const side = Math.min(vw, vh) * 0.80;
+        const cx = vw / 2;
+        const cy = vh / 2;
+        const guideRect = {
+            x: Math.floor(cx - side / 2),
+            y: Math.floor(cy - side / 2),
+            w: Math.floor(side),
+            h: Math.floor(side)
+        };
 
-        // 2. Draw viewfinder target guide & reticles
-        drawLockReticle(quad, vw, vh);
+        // Draw the viewfinder guide
+        drawViewfinderGuide(guideRect, vw, vh);
 
-        if (quad) {
-            document.getElementById('receiverStatusBadge').textContent = "● LOCKED ONTO BEAM";
-            document.getElementById('receiverStatusBadge').className = "badge-locked";
+        // Read pixels from the guide region
+        const imgData = receiverCtx.getImageData(guideRect.x, guideRect.y, guideRect.w, guideRect.h);
 
-            // 3. Calibrate colors if in color mode
-            if (receiverColorMode > 0) {
-                calibrateColorsFromFrame(imgData, vw, vh, quad);
+        // Try to decode
+        let decodedPacket = null;
+        let matchedLayout = null;
+        let matchedLabel = '';
+
+        if (receiverLockedConfig) {
+            // Already locked onto a config — only try that one (fast path)
+            const layout = CACHED_LAYOUTS[`${receiverLockedConfig.grid}_${receiverLockedConfig.mode}`];
+            const sampledGrid = sampleGridFromRegion(imgData, guideRect.w, guideRect.h, layout);
+            const rawBytes = gridIndicesToBytes(sampledGrid, layout);
+            decodedPacket = unpackPacket(rawBytes);
+            if (decodedPacket) {
+                matchedLayout = layout;
+                matchedLabel = receiverLockedConfig.label;
+            } else {
+                // Lost lock, fall back to sweep
+                receiverLockedConfig = null;
             }
+        }
 
-            // 4. Try current mode and auto-fallback if needed
-            let decodedPacket = null;
-            const candidateConfigs = [
-                { grid: receiverGridSize, mode: receiverColorMode },
-                { grid: 32, mode: 0 },
-                { grid: 64, mode: 2 },
-                { grid: 48, mode: 1 },
-                { grid: 32, mode: 1 },
-                { grid: 64, mode: 0 }
-            ];
-
-            for (const cfg of candidateConfigs) {
-                const tempLayout = (cfg.grid === receiverLayout.gridSize && cfg.mode === receiverLayout.colorMode)
-                    ? receiverLayout : new JSColorMatrixLayout(cfg.grid, cfg.mode);
-
-                const sampledGrid = sampleGridFromQuad(imgData, vw, vh, quad, tempLayout.gridSize, tempLayout.colorMode);
-                const rawBytes = gridIndicesToBytes(sampledGrid, tempLayout);
+        if (!decodedPacket) {
+            // Sweep all candidate configs
+            for (const cfg of CANDIDATE_CONFIGS) {
+                const key = `${cfg.grid}_${cfg.mode}`;
+                const layout = CACHED_LAYOUTS[key];
+                const sampledGrid = sampleGridFromRegion(imgData, guideRect.w, guideRect.h, layout);
+                const rawBytes = gridIndicesToBytes(sampledGrid, layout);
                 const packet = unpackPacket(rawBytes);
-
                 if (packet) {
                     decodedPacket = packet;
-                    if (receiverLayout.gridSize !== cfg.grid || receiverLayout.colorMode !== cfg.mode) {
-                        receiverLayout = tempLayout;
-                        receiverGridSize = cfg.grid;
-                        receiverColorMode = cfg.mode;
-                    }
+                    matchedLayout = layout;
+                    matchedLabel = cfg.label;
+                    receiverLockedConfig = cfg;
                     break;
                 }
             }
+        }
 
-            if (decodedPacket) {
-                receiverPacketsCaught++;
-                const { header, payload } = decodedPacket;
+        if (decodedPacket) {
+            receiverPacketsCaught++;
+            document.getElementById('receiverStatusBadge').textContent = `● LOCKED: ${matchedLabel}`;
+            document.getElementById('receiverStatusBadge').className = "badge-locked";
 
-                if (!receiverDecoder || receiverCurrentFileId !== header.fileId) {
-                    receiverCurrentFileId = header.fileId;
-                    receiverDecoder = new LTDecoder(header.totalBlocks, header.blockSize, header.totalBlocks * header.blockSize);
-                    receiverIsComplete = false;
-                }
+            const { header, payload } = decodedPacket;
 
-                const solved = receiverDecoder.addDroplet(header.seed, payload);
-                const progress = receiverDecoder.getProgress();
+            if (!receiverDecoder || receiverCurrentFileId !== header.fileId) {
+                receiverCurrentFileId = header.fileId;
+                receiverDecoder = new LTDecoder(header.totalBlocks, header.blockSize, header.totalBlocks * header.blockSize);
+                receiverIsComplete = false;
+            }
 
-                updateReceiverProgress(progress);
+            const solved = receiverDecoder.addDroplet(header.seed, payload);
+            updateReceiverProgress(receiverDecoder.getProgress());
 
-                if (solved && !receiverIsComplete) {
-                    receiverIsComplete = true;
-                    onFileTransferComplete();
-                }
-            } else {
-                receiverCRCErrors++;
+            if (solved && !receiverIsComplete) {
+                receiverIsComplete = true;
+                onFileTransferComplete();
             }
         } else {
-            document.getElementById('receiverStatusBadge').textContent = "● SCANNING FOR OPTICAL BEAM";
+            receiverCRCErrors++;
+            document.getElementById('receiverStatusBadge').textContent = "● SCANNING (align matrix in guide)";
             document.getElementById('receiverStatusBadge').className = "badge-scanning";
         }
 
-        document.getElementById('receiverDropletVal').textContent = `Caught: ${receiverPacketsCaught} (Drops: ${receiverCRCErrors})`;
+        document.getElementById('receiverDropletVal').textContent =
+            `Caught: ${receiverPacketsCaught} (Drops: ${receiverCRCErrors})`;
     }
 
-    if (receiverRunning) {
-        requestAnimationFrame(processReceiverFrame);
-    }
+    requestAnimationFrame(processReceiverFrame);
 }
+
+// ===================== GRID SAMPLING =====================
 
 /**
- * Universal corner detector: Searches the camera viewfinder for the prominent matrix bounding box
+ * Samples the grid from a cropped region (the viewfinder guide area).
+ * Uses 3x3 multi-pixel averaging per cell for noise resilience.
+ * Uses Otsu adaptive threshold for B&W mode.
  */
-function detectMatrixCorners(imgData, w, h) {
-    // Dynamic Guide Box: Center 70% of the screen
-    const boxW = Math.min(w * 0.75, h * 0.85);
-    const cx = w / 2;
-    const cy = h / 2;
-
-    let tl = { x: cx - boxW / 2, y: cy - boxW / 2 };
-    let tr = { x: cx + boxW / 2, y: cy - boxW / 2 };
-    let br = { x: cx + boxW / 2, y: cy + boxW / 2 };
-    let bl = { x: cx - boxW / 2, y: cy + boxW / 2 };
-
-    // Search around guide corners for the sharp white outer border
-    tl = snapToHighContrastCorner(imgData, w, h, tl.x, tl.y, -1, -1);
-    tr = snapToHighContrastCorner(imgData, w, h, tr.x, tr.y, 1, -1);
-    br = snapToHighContrastCorner(imgData, w, h, br.x, br.y, 1, 1);
-    bl = snapToHighContrastCorner(imgData, w, h, bl.x, bl.y, -1, 1);
-
-    return [tl, tr, br, bl];
-}
-
-function snapToHighContrastCorner(imgData, w, h, initX, initY, dirX, dirY) {
+function sampleGridFromRegion(imgData, regionW, regionH, layout) {
+    const N = layout.gridSize;
+    const grid2D = Array.from({ length: N }, () => new Uint8Array(N));
     const data = imgData.data;
-    const radius = 50;
-    let maxGrad = -1;
-    let bestX = initX;
-    let bestY = initY;
+    const colorMode = layout.colorMode;
+    const cellW = regionW / N;
+    const cellH = regionH / N;
+    const palette = layout.palette;
 
-    const minX = Math.max(10, Math.floor(initX - radius));
-    const maxX = Math.min(w - 10, Math.floor(initX + radius));
-    const minY = Math.max(10, Math.floor(initY - radius));
-    const maxY = Math.min(h - 10, Math.floor(initY + radius));
-
-    for (let y = minY; y <= maxY; y += 4) {
-        for (let x = minX; x <= maxX; x += 4) {
-            const idx = (y * w + x) * 4;
-            const r = data[idx];
-            const g = data[idx + 1];
-            const b = data[idx + 2];
-            const luma = 0.299 * r + 0.587 * g + 0.114 * b;
-
-            // Gradient relative to background
-            if (luma > maxGrad) {
-                maxGrad = luma;
-                bestX = x;
-                bestY = y;
-            }
-        }
+    // For B&W mode: compute Otsu threshold over a sample of luminance values
+    let lumaThreshold = 128;
+    if (colorMode === 0) {
+        lumaThreshold = computeOtsuThreshold(data, regionW, regionH, N);
     }
 
-    if (maxGrad > 120) {
-        return { x: bestX, y: bestY };
-    }
-    return { x: initX, y: initY };
-}
+    for (let r = 0; r < N; r++) {
+        for (let c = 0; c < N; c++) {
+            // Sample 3x3 kernel at cell center for noise resilience
+            const centerX = (c + 0.5) * cellW;
+            const centerY = (r + 0.5) * cellH;
 
-function calibrateColorsFromFrame(imgData, w, h, quad) {
-    const [tl, tr, br, bl] = quad;
-    const N = receiverLayout.gridSize;
-    const calCoords = receiverLayout.calCells;
-    if (calCoords.length < 4) return;
+            let avgR = 0, avgG = 0, avgB = 0, count = 0;
+            const offsets = [-0.15, 0, 0.15]; // sample at center ± 15% of cell
 
-    const samples = [];
-    for (let i = 0; i < Math.min(5, calCoords.length); i++) {
-        const { r, c } = calCoords[i];
-        const u = (c + 0.5) / N;
-        const v = (r + 0.5) / N;
-
-        const topX = tl.x + u * (tr.x - tl.x);
-        const topY = tl.y + u * (tr.y - tl.y);
-        const botX = bl.x + u * (br.x - bl.x);
-        const botY = bl.y + u * (br.y - bl.y);
-
-        const px = Math.floor(topX + v * (botX - topX));
-        const py = Math.floor(topY + v * (botY - topY));
-
-        if (px >= 0 && px < w && py >= 0 && py < h) {
-            const idx = (py * w + px) * 4;
-            samples.push([imgData.data[idx], imgData.data[idx + 1], imgData.data[idx + 2]]);
-        }
-    }
-
-    if (samples.length >= 4) {
-        if (receiverColorMode === 2 && samples.length >= 5) {
-            const [K, R, G, B, W] = samples;
-            calibratedPalette[0] = K; // Black
-            calibratedPalette[1] = B; // Blue
-            calibratedPalette[2] = G; // Green
-            calibratedPalette[3] = [(G[0]+B[0])/2, (G[1]+B[1])/2, (G[2]+B[2])/2]; // Cyan
-            calibratedPalette[4] = R; // Red
-            calibratedPalette[5] = [(R[0]+B[0])/2, (R[1]+B[1])/2, (R[2]+B[2])/2]; // Magenta
-            calibratedPalette[6] = [(R[0]+G[0])/2, (R[1]+G[1])/2, (R[2]+G[2])/2]; // Yellow
-            calibratedPalette[7] = W; // White
-        } else if (receiverColorMode === 1) {
-            const [K, R, G, W] = samples;
-            calibratedPalette[0] = K;
-            calibratedPalette[1] = R;
-            calibratedPalette[2] = G;
-            calibratedPalette[3] = W;
-        }
-    }
-}
-
-function sampleGridFromQuad(imgData, w, h, quad, gridSize, colorMode) {
-    const [tl, tr, br, bl] = quad;
-    const grid2D = Array.from({ length: gridSize }, () => new Uint8Array(gridSize));
-    const data = imgData.data;
-
-    // Calculate dynamic midpoint threshold for Mode 0 (1-bit B&W)
-    let dynamicLumaThreshold = 128;
-
-    for (let r = 0; r < gridSize; r++) {
-        const v = (r + 0.5) / gridSize;
-        for (let c = 0; c < gridSize; c++) {
-            const u = (c + 0.5) / gridSize;
-
-            const topX = tl.x + u * (tr.x - tl.x);
-            const topY = tl.y + u * (tr.y - tl.y);
-            const botX = bl.x + u * (br.x - bl.x);
-            const botY = bl.y + u * (br.y - bl.y);
-
-            const px = Math.floor(topX + v * (botX - topX));
-            const py = Math.floor(topY + v * (botY - topY));
-
-            if (px >= 0 && px < w && py >= 0 && py < h) {
-                const idx = (py * w + px) * 4;
-                const cr = data[idx];
-                const cg = data[idx + 1];
-                const cb = data[idx + 2];
-
-                if (colorMode === 0) {
-                    // 1-bit Monochrome B&W: Simple high-contrast luminance
-                    const luma = 0.299 * cr + 0.587 * cg + 0.114 * cb;
-                    grid2D[r][c] = (luma > dynamicLumaThreshold) ? 1 : 0;
-                } else if (colorMode === 1) {
-                    // 2-bit 4-Color (K, R, G, W)
-                    let bestIdx = 0;
-                    let minDist = 1e9;
-                    for (let k = 0; k < 4; k++) {
-                        const [pr, pg, pb] = calibratedPalette[k];
-                        const dist = (cr - pr) ** 2 + (cg - pg) ** 2 + (cb - pb) ** 2;
-                        if (dist < minDist) {
-                            minDist = dist;
-                            bestIdx = k;
-                        }
+            for (const dy of offsets) {
+                for (const dx of offsets) {
+                    const px = Math.floor(centerX + dx * cellW);
+                    const py = Math.floor(centerY + dy * cellH);
+                    if (px >= 0 && px < regionW && py >= 0 && py < regionH) {
+                        const idx = (py * regionW + px) * 4;
+                        avgR += data[idx];
+                        avgG += data[idx + 1];
+                        avgB += data[idx + 2];
+                        count++;
                     }
-                    grid2D[r][c] = bestIdx;
-                } else {
-                    // 3-bit 8-Color (JAB)
-                    let bestIdx = 0;
-                    let minDist = 1e9;
-                    for (let k = 0; k < 8; k++) {
-                        const [pr, pg, pb] = calibratedPalette[k];
-                        const dist = (cr - pr) ** 2 + (cg - pg) ** 2 + (cb - pb) ** 2;
-                        if (dist < minDist) {
-                            minDist = dist;
-                            bestIdx = k;
-                        }
-                    }
-                    grid2D[r][c] = bestIdx;
                 }
+            }
+
+            if (count > 0) {
+                avgR = avgR / count;
+                avgG = avgG / count;
+                avgB = avgB / count;
+            }
+
+            if (colorMode === 0) {
+                // B&W: adaptive Otsu threshold
+                const luma = 0.299 * avgR + 0.587 * avgG + 0.114 * avgB;
+                grid2D[r][c] = (luma > lumaThreshold) ? 1 : 0;
+            } else {
+                // Color modes: nearest-neighbor to palette
+                let bestIdx = 0;
+                let minDist = Infinity;
+                for (let k = 0; k < palette.length; k++) {
+                    const [pr, pg, pb] = palette[k];
+                    const dist = (avgR - pr) ** 2 + (avgG - pg) ** 2 + (avgB - pb) ** 2;
+                    if (dist < minDist) {
+                        minDist = dist;
+                        bestIdx = k;
+                    }
+                }
+                grid2D[r][c] = bestIdx;
             }
         }
     }
@@ -1775,34 +1666,104 @@ function sampleGridFromQuad(imgData, w, h, quad, gridSize, colorMode) {
     return grid2D;
 }
 
-function drawLockReticle(quad, w, h) {
-    if (!quad) return;
+/**
+ * Computes Otsu's optimal threshold from a sparse sample of pixel luminance values.
+ * This dynamically adapts to screen brightness, camera exposure, and ambient light.
+ */
+function computeOtsuThreshold(data, w, h, gridSize) {
+    // Sample ~500 pixels uniformly across the image
+    const step = Math.max(1, Math.floor((w * h) / 500));
+    const histogram = new Uint32Array(256);
+    let sampleCount = 0;
 
-    // Outer guide box
-    receiverCtx.strokeStyle = '#00ff66';
-    receiverCtx.lineWidth = 2.5;
-    receiverCtx.beginPath();
-    receiverCtx.moveTo(quad[0].x, quad[0].y);
-    receiverCtx.lineTo(quad[1].x, quad[1].y);
-    receiverCtx.lineTo(quad[2].x, quad[2].y);
-    receiverCtx.lineTo(quad[3].x, quad[3].y);
-    receiverCtx.closePath();
-    receiverCtx.stroke();
+    for (let i = 0; i < w * h; i += step) {
+        const idx = i * 4;
+        const luma = Math.floor(0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2]);
+        histogram[Math.min(255, luma)]++;
+        sampleCount++;
+    }
 
-    // Corner reticles
-    quad.forEach((pt) => {
-        receiverCtx.fillStyle = '#00ff66';
-        receiverCtx.beginPath();
-        receiverCtx.arc(pt.x, pt.y, 6, 0, 2 * Math.PI);
-        receiverCtx.fill();
+    // Otsu's method
+    let sumTotal = 0;
+    for (let i = 0; i < 256; i++) sumTotal += i * histogram[i];
 
-        receiverCtx.strokeStyle = '#ffffff';
-        receiverCtx.lineWidth = 2;
-        receiverCtx.beginPath();
-        receiverCtx.arc(pt.x, pt.y, 14, 0, 2 * Math.PI);
-        receiverCtx.stroke();
-    });
+    let sumBg = 0, weightBg = 0;
+    let maxVariance = 0, threshold = 128;
+
+    for (let t = 0; t < 256; t++) {
+        weightBg += histogram[t];
+        if (weightBg === 0) continue;
+        const weightFg = sampleCount - weightBg;
+        if (weightFg === 0) break;
+
+        sumBg += t * histogram[t];
+        const meanBg = sumBg / weightBg;
+        const meanFg = (sumTotal - sumBg) / weightFg;
+        const variance = weightBg * weightFg * (meanBg - meanFg) ** 2;
+
+        if (variance > maxVariance) {
+            maxVariance = variance;
+            threshold = t;
+        }
+    }
+
+    return threshold;
 }
+
+// ===================== VIEWFINDER UI =====================
+
+function drawViewfinderGuide(rect, vw, vh) {
+    const ctx = receiverCtx;
+    const { x, y, w, h } = rect;
+    const bracketLen = Math.min(w, h) * 0.08;
+    const lw = 3;
+
+    // Semi-transparent overlay outside the guide
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.35)';
+    ctx.fillRect(0, 0, vw, y);           // top
+    ctx.fillRect(0, y + h, vw, vh - y - h); // bottom
+    ctx.fillRect(0, y, x, h);            // left
+    ctx.fillRect(x + w, y, vw - x - w, h); // right
+
+    // Corner brackets (green)
+    ctx.strokeStyle = '#00ff66';
+    ctx.lineWidth = lw;
+    ctx.lineCap = 'round';
+
+    // Top-Left
+    ctx.beginPath();
+    ctx.moveTo(x, y + bracketLen); ctx.lineTo(x, y); ctx.lineTo(x + bracketLen, y);
+    ctx.stroke();
+    // Top-Right
+    ctx.beginPath();
+    ctx.moveTo(x + w - bracketLen, y); ctx.lineTo(x + w, y); ctx.lineTo(x + w, y + bracketLen);
+    ctx.stroke();
+    // Bottom-Right
+    ctx.beginPath();
+    ctx.moveTo(x + w, y + h - bracketLen); ctx.lineTo(x + w, y + h); ctx.lineTo(x + w - bracketLen, y + h);
+    ctx.stroke();
+    // Bottom-Left
+    ctx.beginPath();
+    ctx.moveTo(x + bracketLen, y + h); ctx.lineTo(x, y + h); ctx.lineTo(x, y + h - bracketLen);
+    ctx.stroke();
+
+    // Center crosshair (subtle)
+    ctx.strokeStyle = 'rgba(0, 255, 102, 0.3)';
+    ctx.lineWidth = 1;
+    const cx = x + w / 2, cy = y + h / 2;
+    ctx.beginPath();
+    ctx.moveTo(cx - 15, cy); ctx.lineTo(cx + 15, cy);
+    ctx.moveTo(cx, cy - 15); ctx.lineTo(cx, cy + 15);
+    ctx.stroke();
+
+    // Label
+    ctx.fillStyle = '#00ff66';
+    ctx.font = '12px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('Fill this area with the flashing matrix', x + w / 2, y - 8);
+}
+
+// ===================== PROGRESS & COMPLETION =====================
 
 function updateReceiverProgress(ratio) {
     const pct = Math.min(100, Math.floor(ratio * 100));
@@ -1839,7 +1800,7 @@ function onFileTransferComplete() {
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
 
-    alert(`🎉 Success! Received and downloaded: ${filename} (${(filePayload.length / 1024).toFixed(1)} KB)`);
+    alert(`🎉 Received: ${filename} (${(filePayload.length / 1024).toFixed(1)} KB)`);
 }
 
 
