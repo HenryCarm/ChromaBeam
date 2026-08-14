@@ -1,19 +1,19 @@
 [app]
 
 # (str) Title of your application
-title = ChromaBeam
+title = QR ChromaBeam
 
 # (str) Package name
-package.name = chromabeam
+package.name = qrchromabeam
 
 # (str) Package domain (needed for android/ios packaging)
-package.domain = org.henry.chromabeam
+package.domain = org.henry.qrchromabeam
 
 # (str) Source code where the main.py lives
 source.dir = .
 
 # (list) Source files to include (let empty to include all the files)
-source.include_exts = py,png,jpg,kv,atlas,html,js,css,json
+source.include_exts = py,png,jpg,kv,atlas,html,js,css,json,ico
 
 # (str) Icon of the application
 icon.filename = %(source.dir)s/assets/icon.png
@@ -28,10 +28,13 @@ version = 1.0.0
 android.numeric_version = 2680317
 
 # (list) Application requirements
-requirements = python3,kivy,opencv,numpy,requests,android,pillow,qrcode
+requirements = python3,kivy,android,pyjnius
+
+# (list) Supported architectures
+android.archs = arm64-v8a
 
 # (list) Permissions
-android.permissions = CAMERA,READ_EXTERNAL_STORAGE,WRITE_EXTERNAL_STORAGE,MANAGE_EXTERNAL_STORAGE,INTERNET,ACCESS_NETWORK_STATE
+android.permissions = CAMERA,READ_EXTERNAL_STORAGE,WRITE_EXTERNAL_STORAGE,MANAGE_EXTERNAL_STORAGE,INTERNET,ACCESS_NETWORK_STATE,RECORD_AUDIO
 
 # (bool) Automatically accept Android SDK license
 android.accept_sdk_license = True
