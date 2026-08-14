@@ -109,7 +109,7 @@ function setupScannerWorker() {
     // 2. Check for server-hosted scanner_worker.js
     if (typeof window !== 'undefined' && typeof window.Worker !== 'undefined') {
         try {
-            scannerWorker = new Worker('scanner_worker.js?v=4');
+            scannerWorker = new Worker('scanner_worker.js?v=5');
             scannerWorker.onmessage = handleWorkerMessage;
             scannerWorker.onerror = function(err) {
                 appendReceiverLog(`[WORKER ERROR] ${err.message || 'Worker thread failure'}`, "error");
@@ -546,6 +546,9 @@ function handleWorkerMessage(e) {
     }
 }
 
+let lastReceivedBlobUrl = null;
+let lastReceivedFilename = null;
+
 function downloadReceivedFile(fileResult) {
     updateReceiverProgress(1.0, "100.0000%", fileResult.filesize, fileResult.filesize);
     const badge = document.getElementById('receiverStatusBadge');
@@ -555,26 +558,42 @@ function downloadReceivedFile(fileResult) {
     }
 
     const { filename, payloadBuffer } = fileResult;
+    lastReceivedFilename = filename;
+
     if (typeof Blob !== 'undefined' && typeof URL !== 'undefined' && typeof document !== 'undefined') {
         try {
             const blob = new Blob([payloadBuffer], { type: 'application/octet-stream' });
-            const url = URL.createObjectURL(blob);
+            if (lastReceivedBlobUrl) {
+                try { URL.revokeObjectURL(lastReceivedBlobUrl); } catch (_) {}
+            }
+            lastReceivedBlobUrl = URL.createObjectURL(blob);
+
+            // Show persistent download card in UI
+            const dlCard = document.getElementById('receiverDownloadCard');
+            const dlLink = document.getElementById('receiverDownloadLink');
+            if (dlCard && dlLink) {
+                dlLink.href = lastReceivedBlobUrl;
+                dlLink.download = filename;
+                dlLink.textContent = `📥 SAVE ${filename} (${(payloadBuffer.byteLength / 1024).toFixed(1)} KB)`;
+                dlCard.style.display = 'block';
+            }
+
+            // Auto-trigger download (do NOT revoke object URL immediately so mobile download managers can stream it)
             const a = document.createElement('a');
-            a.href = url;
+            a.href = lastReceivedBlobUrl;
             a.download = filename;
+            a.target = '_blank';
             if (document.body) document.body.appendChild(a);
             a.click();
-            if (document.body) document.body.removeChild(a);
-            URL.revokeObjectURL(url);
+            setTimeout(() => {
+                try { if (document.body && a.parentNode) document.body.removeChild(a); } catch (_) {}
+            }, 2000);
         } catch (e) {
             console.warn("[Receiver] Download file trigger error:", e);
         }
     }
 
-    appendReceiverLog(`[SUCCESS] Assembly complete! Downloaded ${filename} (${(payloadBuffer.byteLength / 1024).toFixed(1)} KB)`, "decode");
-    if (typeof alert === 'function') {
-        alert(`🎉 Success! Received and assembled file: ${filename} (${(payloadBuffer.byteLength / 1024).toFixed(1)} KB)`);
-    }
+    appendReceiverLog(`[SUCCESS] Assembly complete! Received ${filename} (${(payloadBuffer.byteLength / 1024).toFixed(1)} KB)`, "decode");
 }
 
 // ===================== LOGGING CONSOLE =====================

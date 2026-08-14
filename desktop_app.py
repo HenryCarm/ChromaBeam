@@ -537,7 +537,16 @@ class UnifiedChromaBeamApp(QMainWindow):
         self.filesize = len(data)
         self.file_id = random.randint(1000, 60000)
 
-        block_size = max(24, self.layout_engine.max_payload_bytes - 16)
+        if self.color_mode == MODE_1BIT_BW:
+            if self.filesize <= 2048:
+                block_size = 64
+            elif self.filesize <= 64 * 1024:
+                block_size = 200
+            else:
+                block_size = 350
+        else:
+            block_size = max(24, self.layout_engine.max_payload_bytes - 16)
+
         meta_bytes = pack_file_metadata(self.filename, self.filesize)
         full_stream_payload = meta_bytes + self.file_data
 
