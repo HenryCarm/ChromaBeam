@@ -1,16 +1,18 @@
 /**
- * ChromaBeam High-Performance Universal Optical Receiver v3
+ * ChromaBeam High-Performance Optical Receiver v4
  * 
- * APPROACH: Fixed centered viewfinder guide. User positions the flashing matrix
- * to fill the guide. No fragile auto-corner-detection needed.
+ * KEY FIX: Within the viewfinder guide, automatically detect the actual matrix
+ * bounding box by scanning for the bright white anchor borders. This means the
+ * user doesn't need to perfectly fill the guide — just get the matrix roughly
+ * inside it and we'll find the exact edges.
  * 
  * Features:
- * - Fixed viewfinder guide with clear corner brackets
- * - Multi-pixel cell sampling (3x3 kernel) for noise resilience
- * - Otsu adaptive threshold for B&W mode
- * - Euclidean nearest-neighbor for color modes with 5-point calibration
- * - Auto-density sweep across all 6 mode/grid combinations
- * - Pre-cached layouts to avoid GC thrashing on mobile
+ * - Auto-crop to actual matrix edges within guide region
+ * - 3x3 multi-pixel cell sampling with averaging
+ * - Otsu adaptive threshold for B&W
+ * - Nearest-neighbor for color modes
+ * - Auto-density sweep with config locking
+ * - Pre-cached layouts (zero GC per frame)
  */
 
 let receiverVideo = null;
@@ -27,24 +29,22 @@ let receiverIsComplete = false;
 let receiverFpsCounter = 0;
 let receiverLastFpsTime = 0;
 let receiverCalculatedFPS = 0;
-let receiverLockedConfig = null; // Once we catch a valid packet, lock to that config
+let receiverLockedConfig = null;
 
-// Pre-cache ALL candidate layouts at startup to avoid per-frame allocation
+// Pre-cache ALL candidate layouts at startup
 const CANDIDATE_CONFIGS = [
-    { grid: 32, mode: 0, label: '32x32 B&W' },
-    { grid: 32, mode: 1, label: '32x32 4-Color' },
-    { grid: 48, mode: 0, label: '48x48 B&W' },
-    { grid: 48, mode: 1, label: '48x48 4-Color' },
-    { grid: 48, mode: 2, label: '48x48 8-Color' },
-    { grid: 64, mode: 0, label: '64x64 B&W' },
-    { grid: 64, mode: 1, label: '64x64 4-Color' },
-    { grid: 64, mode: 2, label: '64x64 8-Color' },
+    { grid: 32, mode: 0, label: '32×32 B&W' },
+    { grid: 48, mode: 0, label: '48×48 B&W' },
+    { grid: 64, mode: 0, label: '64×64 B&W' },
+    { grid: 32, mode: 1, label: '32×32 4-Color' },
+    { grid: 48, mode: 1, label: '48×48 4-Color' },
+    { grid: 48, mode: 2, label: '48×48 8-Color' },
+    { grid: 64, mode: 2, label: '64×64 8-Color' },
 ];
 
 const CACHED_LAYOUTS = {};
 for (const cfg of CANDIDATE_CONFIGS) {
-    const key = `${cfg.grid}_${cfg.mode}`;
-    CACHED_LAYOUTS[key] = new JSColorMatrixLayout(cfg.grid, cfg.mode);
+    CACHED_LAYOUTS[`${cfg.grid}_${cfg.mode}`] = new JSColorMatrixLayout(cfg.grid, cfg.mode);
 }
 
 function initReceiver() {
@@ -65,20 +65,9 @@ function resetReceiverSession() {
     updateReceiverProgress(0);
 }
 
-async function getCameraStream(constraints) {
-    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-        return await navigator.mediaDevices.getUserMedia(constraints);
-    }
-    const legacy = navigator.getUserMedia || navigator.webkitGetUserMedia || navigator.mozGetUserMedia;
-    if (legacy) {
-        return new Promise((resolve, reject) => legacy.call(navigator, constraints, resolve, reject));
-    }
-    throw new Error("INSECURE_CONTEXT_OR_UNSUPPORTED");
-}
-
 async function startReceiverCamera() {
     try {
-        receiverStream = await getCameraStream({
+        const stream = await navigator.mediaDevices.getUserMedia({
             video: {
                 facingMode: { ideal: "environment" },
                 width: { ideal: 1280 },
@@ -87,7 +76,8 @@ async function startReceiverCamera() {
             },
             audio: false
         });
-        receiverVideo.srcObject = receiverStream;
+        receiverStream = stream;
+        receiverVideo.srcObject = stream;
         await receiverVideo.play();
 
         receiverRunning = true;
@@ -100,7 +90,7 @@ async function startReceiverCamera() {
 
         requestAnimationFrame(processReceiverFrame);
     } catch (err) {
-        if (err.message === "INSECURE_CONTEXT_OR_UNSUPPORTED" || err.name === "TypeError") {
+        if (err.name === "NotAllowedError" || err.name === "TypeError" || err.name === "NotFoundError") {
             const httpsUrl = `https://${location.hostname}:8443/`;
             alert(`⚠️ Camera requires HTTPS!\n\nOpen: ${httpsUrl}\n(Tap Advanced → Proceed if prompted)`);
             if (confirm("Redirect to HTTPS?")) window.location.href = httpsUrl;
@@ -127,7 +117,6 @@ function stopReceiverCamera() {
 function processReceiverFrame() {
     if (!receiverRunning || receiverIsComplete) return;
 
-    // FPS counter
     receiverFpsCounter++;
     const now = performance.now();
     if (now - receiverLastFpsTime >= 1000) {
@@ -147,58 +136,54 @@ function processReceiverFrame() {
         }
 
         receiverCtx.drawImage(receiverVideo, 0, 0, vw, vh);
+        const fullImgData = receiverCtx.getImageData(0, 0, vw, vh);
 
-        // Fixed centered square viewfinder guide (user fills this with the matrix)
-        const side = Math.min(vw, vh) * 0.80;
-        const cx = vw / 2;
-        const cy = vh / 2;
-        const guideRect = {
-            x: Math.floor(cx - side / 2),
-            y: Math.floor(cy - side / 2),
-            w: Math.floor(side),
-            h: Math.floor(side)
-        };
+        // Step 1: Define a generous guide region (center 85%)
+        const guideSide = Math.min(vw, vh) * 0.85;
+        const gx = Math.floor((vw - guideSide) / 2);
+        const gy = Math.floor((vh - guideSide) / 2);
+        const gw = Math.floor(guideSide);
+        const gh = Math.floor(guideSide);
 
-        // Draw the viewfinder guide
-        drawViewfinderGuide(guideRect, vw, vh);
+        // Step 2: Within the guide, auto-detect the actual matrix bounding box
+        const matrixRect = detectMatrixBounds(fullImgData, vw, vh, gx, gy, gw, gh);
 
-        // Read pixels from the guide region
-        const imgData = receiverCtx.getImageData(guideRect.x, guideRect.y, guideRect.w, guideRect.h);
+        // Step 3: Draw viewfinder and detected bounds
+        drawViewfinder(gx, gy, gw, gh, matrixRect, vw, vh);
 
-        // Try to decode
+        // Step 4: Sample and decode from the detected matrix region
         let decodedPacket = null;
-        let matchedLayout = null;
         let matchedLabel = '';
 
-        if (receiverLockedConfig) {
-            // Already locked onto a config — only try that one (fast path)
-            const layout = CACHED_LAYOUTS[`${receiverLockedConfig.grid}_${receiverLockedConfig.mode}`];
-            const sampledGrid = sampleGridFromRegion(imgData, guideRect.w, guideRect.h, layout);
-            const rawBytes = gridIndicesToBytes(sampledGrid, layout);
-            decodedPacket = unpackPacket(rawBytes);
-            if (decodedPacket) {
-                matchedLayout = layout;
-                matchedLabel = receiverLockedConfig.label;
-            } else {
-                // Lost lock, fall back to sweep
-                receiverLockedConfig = null;
-            }
-        }
+        if (matrixRect && matrixRect.w > 30 && matrixRect.h > 30) {
+            const mImgData = receiverCtx.getImageData(matrixRect.x, matrixRect.y, matrixRect.w, matrixRect.h);
 
-        if (!decodedPacket) {
-            // Sweep all candidate configs
-            for (const cfg of CANDIDATE_CONFIGS) {
-                const key = `${cfg.grid}_${cfg.mode}`;
+            if (receiverLockedConfig) {
+                const key = `${receiverLockedConfig.grid}_${receiverLockedConfig.mode}`;
                 const layout = CACHED_LAYOUTS[key];
-                const sampledGrid = sampleGridFromRegion(imgData, guideRect.w, guideRect.h, layout);
-                const rawBytes = gridIndicesToBytes(sampledGrid, layout);
-                const packet = unpackPacket(rawBytes);
-                if (packet) {
-                    decodedPacket = packet;
-                    matchedLayout = layout;
-                    matchedLabel = cfg.label;
-                    receiverLockedConfig = cfg;
-                    break;
+                const grid = sampleGrid(mImgData, matrixRect.w, matrixRect.h, layout);
+                const bytes = gridIndicesToBytes(grid, layout);
+                decodedPacket = unpackPacket(bytes);
+                if (decodedPacket) {
+                    matchedLabel = receiverLockedConfig.label;
+                } else {
+                    receiverLockedConfig = null; // lost lock
+                }
+            }
+
+            if (!decodedPacket) {
+                for (const cfg of CANDIDATE_CONFIGS) {
+                    const key = `${cfg.grid}_${cfg.mode}`;
+                    const layout = CACHED_LAYOUTS[key];
+                    const grid = sampleGrid(mImgData, matrixRect.w, matrixRect.h, layout);
+                    const bytes = gridIndicesToBytes(grid, layout);
+                    const pkt = unpackPacket(bytes);
+                    if (pkt) {
+                        decodedPacket = pkt;
+                        matchedLabel = cfg.label;
+                        receiverLockedConfig = cfg;
+                        break;
+                    }
                 }
             }
         }
@@ -225,7 +210,7 @@ function processReceiverFrame() {
             }
         } else {
             receiverCRCErrors++;
-            document.getElementById('receiverStatusBadge').textContent = "● SCANNING (align matrix in guide)";
+            document.getElementById('receiverStatusBadge').textContent = "● SCANNING (point at matrix)";
             document.getElementById('receiverStatusBadge').className = "badge-scanning";
         }
 
@@ -236,14 +221,106 @@ function processReceiverFrame() {
     requestAnimationFrame(processReceiverFrame);
 }
 
+// ===================== MATRIX BOUNDARY DETECTION =====================
+
+/**
+ * Within the guide region, finds the actual matrix bounding box by scanning
+ * for rows and columns containing bright pixels (the white anchor borders).
+ * 
+ * This is WAY simpler and more robust than trying to find individual corners.
+ * The matrix has bright white borders on all 4 sides (the anchor patterns),
+ * so we just need to find where the bright stuff starts and ends.
+ */
+function detectMatrixBounds(imgData, imgW, imgH, gx, gy, gw, gh) {
+    const data = imgData.data;
+    const BRIGHT_THRESHOLD = 160; // Pixel is considered "bright" if luma > this
+    const MIN_BRIGHT_PIXELS = 3;  // Minimum bright pixels in a row/col to count
+
+    let topEdge = -1, bottomEdge = -1, leftEdge = -1, rightEdge = -1;
+
+    // Scan rows top→bottom to find top edge
+    for (let y = gy; y < gy + gh; y++) {
+        let brightCount = 0;
+        for (let x = gx; x < gx + gw; x += 3) { // sparse scan for speed
+            const idx = (y * imgW + x) * 4;
+            const luma = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
+            if (luma > BRIGHT_THRESHOLD) brightCount++;
+        }
+        if (brightCount >= MIN_BRIGHT_PIXELS) {
+            topEdge = y;
+            break;
+        }
+    }
+
+    // Scan rows bottom→top to find bottom edge
+    for (let y = gy + gh - 1; y >= gy; y--) {
+        let brightCount = 0;
+        for (let x = gx; x < gx + gw; x += 3) {
+            const idx = (y * imgW + x) * 4;
+            const luma = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
+            if (luma > BRIGHT_THRESHOLD) brightCount++;
+        }
+        if (brightCount >= MIN_BRIGHT_PIXELS) {
+            bottomEdge = y;
+            break;
+        }
+    }
+
+    // Scan columns left→right to find left edge
+    for (let x = gx; x < gx + gw; x++) {
+        let brightCount = 0;
+        for (let y = gy; y < gy + gh; y += 3) {
+            const idx = (y * imgW + x) * 4;
+            const luma = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
+            if (luma > BRIGHT_THRESHOLD) brightCount++;
+        }
+        if (brightCount >= MIN_BRIGHT_PIXELS) {
+            leftEdge = x;
+            break;
+        }
+    }
+
+    // Scan columns right→left to find right edge
+    for (let x = gx + gw - 1; x >= gx; x--) {
+        let brightCount = 0;
+        for (let y = gy; y < gy + gh; y += 3) {
+            const idx = (y * imgW + x) * 4;
+            const luma = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
+            if (luma > BRIGHT_THRESHOLD) brightCount++;
+        }
+        if (brightCount >= MIN_BRIGHT_PIXELS) {
+            rightEdge = x;
+            break;
+        }
+    }
+
+    if (topEdge < 0 || bottomEdge < 0 || leftEdge < 0 || rightEdge < 0) return null;
+    if (rightEdge <= leftEdge || bottomEdge <= topEdge) return null;
+
+    // Make it square (the matrix is always square)
+    let w = rightEdge - leftEdge;
+    let h = bottomEdge - topEdge;
+    const side = Math.min(w, h);
+
+    // Center the square within the detected bounds
+    const cx = leftEdge + w / 2;
+    const cy = topEdge + h / 2;
+
+    return {
+        x: Math.floor(cx - side / 2),
+        y: Math.floor(cy - side / 2),
+        w: Math.floor(side),
+        h: Math.floor(side)
+    };
+}
+
 // ===================== GRID SAMPLING =====================
 
 /**
- * Samples the grid from a cropped region (the viewfinder guide area).
- * Uses 3x3 multi-pixel averaging per cell for noise resilience.
- * Uses Otsu adaptive threshold for B&W mode.
+ * Samples the grid from a cropped matrix region.
+ * Uses 3x3 multi-pixel averaging and Otsu threshold for B&W.
  */
-function sampleGridFromRegion(imgData, regionW, regionH, layout) {
+function sampleGrid(imgData, regionW, regionH, layout) {
     const N = layout.gridSize;
     const grid2D = Array.from({ length: N }, () => new Uint8Array(N));
     const data = imgData.data;
@@ -252,20 +329,20 @@ function sampleGridFromRegion(imgData, regionW, regionH, layout) {
     const cellH = regionH / N;
     const palette = layout.palette;
 
-    // For B&W mode: compute Otsu threshold over a sample of luminance values
+    // Otsu threshold for B&W
     let lumaThreshold = 128;
     if (colorMode === 0) {
-        lumaThreshold = computeOtsuThreshold(data, regionW, regionH, N);
+        lumaThreshold = computeOtsuThreshold(data, regionW, regionH);
     }
 
     for (let r = 0; r < N; r++) {
         for (let c = 0; c < N; c++) {
-            // Sample 3x3 kernel at cell center for noise resilience
             const centerX = (c + 0.5) * cellW;
             const centerY = (r + 0.5) * cellH;
 
+            // 3x3 kernel sampling at cell center ± 20% of cell size
             let avgR = 0, avgG = 0, avgB = 0, count = 0;
-            const offsets = [-0.15, 0, 0.15]; // sample at center ± 15% of cell
+            const offsets = [-0.2, 0, 0.2];
 
             for (const dy of offsets) {
                 for (const dx of offsets) {
@@ -282,17 +359,15 @@ function sampleGridFromRegion(imgData, regionW, regionH, layout) {
             }
 
             if (count > 0) {
-                avgR = avgR / count;
-                avgG = avgG / count;
-                avgB = avgB / count;
+                avgR /= count;
+                avgG /= count;
+                avgB /= count;
             }
 
             if (colorMode === 0) {
-                // B&W: adaptive Otsu threshold
                 const luma = 0.299 * avgR + 0.587 * avgG + 0.114 * avgB;
                 grid2D[r][c] = (luma > lumaThreshold) ? 1 : 0;
             } else {
-                // Color modes: nearest-neighbor to palette
                 let bestIdx = 0;
                 let minDist = Infinity;
                 for (let k = 0; k < palette.length; k++) {
@@ -311,29 +386,24 @@ function sampleGridFromRegion(imgData, regionW, regionH, layout) {
     return grid2D;
 }
 
-/**
- * Computes Otsu's optimal threshold from a sparse sample of pixel luminance values.
- * This dynamically adapts to screen brightness, camera exposure, and ambient light.
- */
-function computeOtsuThreshold(data, w, h, gridSize) {
-    // Sample ~500 pixels uniformly across the image
-    const step = Math.max(1, Math.floor((w * h) / 500));
+function computeOtsuThreshold(data, w, h) {
+    const step = Math.max(1, Math.floor((w * h) / 400));
     const histogram = new Uint32Array(256);
     let sampleCount = 0;
 
     for (let i = 0; i < w * h; i += step) {
         const idx = i * 4;
-        const luma = Math.floor(0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2]);
-        histogram[Math.min(255, luma)]++;
-        sampleCount++;
+        if (idx + 2 < data.length) {
+            const luma = Math.floor(0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2]);
+            histogram[Math.min(255, luma)]++;
+            sampleCount++;
+        }
     }
 
-    // Otsu's method
     let sumTotal = 0;
     for (let i = 0; i < 256; i++) sumTotal += i * histogram[i];
 
-    let sumBg = 0, weightBg = 0;
-    let maxVariance = 0, threshold = 128;
+    let sumBg = 0, weightBg = 0, maxVariance = 0, threshold = 128;
 
     for (let t = 0; t < 256; t++) {
         weightBg += histogram[t];
@@ -357,55 +427,58 @@ function computeOtsuThreshold(data, w, h, gridSize) {
 
 // ===================== VIEWFINDER UI =====================
 
-function drawViewfinderGuide(rect, vw, vh) {
+function drawViewfinder(gx, gy, gw, gh, matrixRect, vw, vh) {
     const ctx = receiverCtx;
-    const { x, y, w, h } = rect;
-    const bracketLen = Math.min(w, h) * 0.08;
-    const lw = 3;
+    const bracketLen = Math.min(gw, gh) * 0.06;
 
-    // Semi-transparent overlay outside the guide
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.35)';
-    ctx.fillRect(0, 0, vw, y);           // top
-    ctx.fillRect(0, y + h, vw, vh - y - h); // bottom
-    ctx.fillRect(0, y, x, h);            // left
-    ctx.fillRect(x + w, y, vw - x - w, h); // right
+    // Dim overlay outside guide
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
+    ctx.fillRect(0, 0, vw, gy);
+    ctx.fillRect(0, gy + gh, vw, vh - gy - gh);
+    ctx.fillRect(0, gy, gx, gh);
+    ctx.fillRect(gx + gw, gy, vw - gx - gw, gh);
 
-    // Corner brackets (green)
+    // Guide corner brackets (green)
     ctx.strokeStyle = '#00ff66';
-    ctx.lineWidth = lw;
+    ctx.lineWidth = 2;
     ctx.lineCap = 'round';
 
-    // Top-Left
+    // TL
     ctx.beginPath();
-    ctx.moveTo(x, y + bracketLen); ctx.lineTo(x, y); ctx.lineTo(x + bracketLen, y);
+    ctx.moveTo(gx, gy + bracketLen); ctx.lineTo(gx, gy); ctx.lineTo(gx + bracketLen, gy);
     ctx.stroke();
-    // Top-Right
+    // TR
     ctx.beginPath();
-    ctx.moveTo(x + w - bracketLen, y); ctx.lineTo(x + w, y); ctx.lineTo(x + w, y + bracketLen);
+    ctx.moveTo(gx + gw - bracketLen, gy); ctx.lineTo(gx + gw, gy); ctx.lineTo(gx + gw, gy + bracketLen);
     ctx.stroke();
-    // Bottom-Right
+    // BR
     ctx.beginPath();
-    ctx.moveTo(x + w, y + h - bracketLen); ctx.lineTo(x + w, y + h); ctx.lineTo(x + w - bracketLen, y + h);
+    ctx.moveTo(gx + gw, gy + gh - bracketLen); ctx.lineTo(gx + gw, gy + gh); ctx.lineTo(gx + gw - bracketLen, gy + gh);
     ctx.stroke();
-    // Bottom-Left
+    // BL
     ctx.beginPath();
-    ctx.moveTo(x + bracketLen, y + h); ctx.lineTo(x, y + h); ctx.lineTo(x, y + h - bracketLen);
-    ctx.stroke();
-
-    // Center crosshair (subtle)
-    ctx.strokeStyle = 'rgba(0, 255, 102, 0.3)';
-    ctx.lineWidth = 1;
-    const cx = x + w / 2, cy = y + h / 2;
-    ctx.beginPath();
-    ctx.moveTo(cx - 15, cy); ctx.lineTo(cx + 15, cy);
-    ctx.moveTo(cx, cy - 15); ctx.lineTo(cx, cy + 15);
+    ctx.moveTo(gx + bracketLen, gy + gh); ctx.lineTo(gx, gy + gh); ctx.lineTo(gx, gy + gh - bracketLen);
     ctx.stroke();
 
-    // Label
+    // If matrix detected, draw tight blue rect around it
+    if (matrixRect) {
+        ctx.strokeStyle = '#58a6ff';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(matrixRect.x, matrixRect.y, matrixRect.w, matrixRect.h);
+
+        // Fill percentage indicator
+        const fillPct = Math.floor((matrixRect.w * matrixRect.h) / (gw * gh) * 100);
+        ctx.fillStyle = '#58a6ff';
+        ctx.font = 'bold 13px sans-serif';
+        ctx.textAlign = 'left';
+        ctx.fillText(`Matrix: ${matrixRect.w}×${matrixRect.h}px (${fillPct}% fill)`, matrixRect.x, matrixRect.y - 6);
+    }
+
+    // Top label
     ctx.fillStyle = '#00ff66';
-    ctx.font = '12px sans-serif';
+    ctx.font = '11px sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText('Fill this area with the flashing matrix', x + w / 2, y - 8);
+    ctx.fillText('Point camera at the flashing matrix', gx + gw / 2, gy - 6);
 }
 
 // ===================== PROGRESS & COMPLETION =====================
