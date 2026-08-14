@@ -33,6 +33,9 @@ requirements = python3,kivy,opencv,numpy,requests,android,pillow,qrcode
 # (list) Permissions
 android.permissions = CAMERA,READ_EXTERNAL_STORAGE,WRITE_EXTERNAL_STORAGE,MANAGE_EXTERNAL_STORAGE,INTERNET,ACCESS_NETWORK_STATE
 
+# (bool) Automatically accept Android SDK license
+android.accept_sdk_license = True
+
 # (int) Target Android API
 android.api = 33
 

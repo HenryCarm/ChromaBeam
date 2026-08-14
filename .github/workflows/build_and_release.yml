@@ -31,7 +31,7 @@ jobs:
       - name: Install System Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgl1-mesa-glx libglib2.0-0 ccache
+          sudo apt-get install -y libgl1 libglx-mesa0 libglib2.0-0 ccache
 
       - name: Install Python Dependencies
         run: |
@@ -46,6 +46,8 @@ jobs:
             --include-package=desktop_receiver \
             --include-package=desktop_sender \
             --include-data-file=chromabeam_offline.html=chromabeam_offline.html \
+            --include-data-dir=assets=assets \
+            --assume-yes-for-downloads \
             --output-dir=dist_linux_standalone \
             desktop_app.py
           tar -czvf ChromaBeam-Linux-x86_64-Standalone.tar.gz -C dist_linux_standalone desktop_app.dist
@@ -58,6 +60,8 @@ jobs:
             --include-package=desktop_receiver \
             --include-package=desktop_sender \
             --include-data-file=chromabeam_offline.html=chromabeam_offline.html \
+            --include-data-dir=assets=assets \
+            --assume-yes-for-downloads \
             --output-filename=ChromaBeam-Linux-x86_64 \
             desktop_app.py
 
@@ -92,26 +96,12 @@ jobs:
 
       - name: Build Nuitka Standalone (Windows Folder)
         run: |
-          python -m nuitka --standalone `
-            --enable-plugin=pyqt6 `
-            --include-package=core `
-            --include-package=desktop_receiver `
-            --include-package=desktop_sender `
-            --include-data-file=chromabeam_offline.html=chromabeam_offline.html `
-            --output-dir=dist_win_standalone `
-            desktop_app.py
+          python -m nuitka --standalone --enable-plugin=pyqt6 --include-package=core --include-package=desktop_receiver --include-package=desktop_sender --include-data-file=chromabeam_offline.html=chromabeam_offline.html --include-data-dir=assets=assets --assume-yes-for-downloads --output-dir=dist_win_standalone desktop_app.py
           Compress-Archive -Path dist_win_standalone\desktop_app.dist\* -DestinationPath ChromaBeam-Windows-x64-Standalone.zip
 
       - name: Build Nuitka Onefile (Portable .exe)
         run: |
-          python -m nuitka --onefile `
-            --enable-plugin=pyqt6 `
-            --include-package=core `
-            --include-package=desktop_receiver `
-            --include-package=desktop_sender `
-            --include-data-file=chromabeam_offline.html=chromabeam_offline.html `
-            --output-filename=ChromaBeam-Windows-x64.exe `
-            desktop_app.py
+          python -m nuitka --onefile --enable-plugin=pyqt6 --include-package=core --include-package=desktop_receiver --include-package=desktop_sender --include-data-file=chromabeam_offline.html=chromabeam_offline.html --include-data-dir=assets=assets --assume-yes-for-downloads --output-filename=ChromaBeam-Windows-x64.exe desktop_app.py
 
       - name: Upload Windows Artifacts
         uses: actions/upload-artifact@v4
@@ -144,7 +134,8 @@ jobs:
 
       - name: Build Android APK with Buildozer
         run: |
-          buildozer android debug
+          export BUILDOZER_ACCEPT_SDK_LICENSE=1
+          yes | buildozer android debug
 
       - name: Rename and Upload APK
         uses: actions/upload-artifact@v4
