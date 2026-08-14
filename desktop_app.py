@@ -318,7 +318,7 @@ class UnifiedChromaBeamApp(QMainWindow):
         fps_row = QHBoxLayout()
         self.fps_lbl = QLabel(f"FPS: {self.target_fps}")
         self.fps_slider = QSlider(Qt.Orientation.Horizontal)
-        self.fps_slider.setRange(10, 60)
+        self.fps_slider.setRange(1, 60)
         self.fps_slider.setValue(self.target_fps)
         self.fps_slider.valueChanged.connect(self._on_fps_changed)
         fps_row.addWidget(self.fps_lbl)

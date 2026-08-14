@@ -20,7 +20,7 @@ def bundle():
         css = f.read()
 
     # JS files in dependency order
-    js_files = ["fountain.js", "protocol.js", "matrix.js", "sender.js", "receiver.js"]
+    js_files = ["fountain.js", "protocol.js", "matrix.js", "vision_engine.js", "sender.js", "receiver.js"]
     combined_js = ""
     for js_file in js_files:
         with open(os.path.join(WEB_DIR, js_file), "r", encoding="utf-8") as f:
