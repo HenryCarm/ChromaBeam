@@ -227,3 +227,14 @@ class LTDecoder {
         return out.subarray(0, this.totalFilesize);
     }
 }
+
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+        Mulberry32,
+        getRobustSolitonCDF,
+        sampleDegree,
+        getDropletIndices,
+        LTEncoder,
+        LTDecoder
+    };
+}

@@ -112,6 +112,56 @@ function renderIdleSenderFrame() {
     drawGridToCanvas(grid2D);
 }
 
+function uint8ArrayToBase64(uint8Array) {
+    let binary = '';
+    const len = uint8Array.byteLength;
+    for (let i = 0; i < len; i++) {
+        binary += String.fromCharCode(uint8Array[i]);
+    }
+    return btoa(binary);
+}
+
+function drawQRCodeToCanvas(packetBytes) {
+    if (typeof qrcode !== 'function') {
+        const grid2D = bytesToGridIndices(packetBytes, senderLayout);
+        drawGridToCanvas(grid2D);
+        return;
+    }
+
+    try {
+        const b64 = uint8ArrayToBase64(packetBytes);
+        const qr = qrcode(0, 'L');
+        qr.addData(b64);
+        qr.make();
+
+        const moduleCount = qr.getModuleCount();
+        const size = senderCanvas.width;
+        const margin = Math.floor(size * 0.04);
+        const drawSize = size - margin * 2;
+        const cellSize = drawSize / moduleCount;
+
+        senderCtx.fillStyle = '#FFFFFF';
+        senderCtx.fillRect(0, 0, size, size);
+
+        senderCtx.fillStyle = '#000000';
+        for (let r = 0; r < moduleCount; r++) {
+            for (let c = 0; c < moduleCount; c++) {
+                if (qr.isDark(r, c)) {
+                    senderCtx.fillRect(
+                        Math.floor(margin + c * cellSize),
+                        Math.floor(margin + r * cellSize),
+                        Math.ceil(cellSize),
+                        Math.ceil(cellSize)
+                    );
+                }
+            }
+        }
+    } catch (e) {
+        const grid2D = bytesToGridIndices(packetBytes, senderLayout);
+        drawGridToCanvas(grid2D);
+    }
+}
+
 function drawGridToCanvas(grid2D) {
     const N = senderLayout.gridSize;
     const size = senderCanvas.width;
@@ -165,8 +215,13 @@ function animateSenderStream(currentTime) {
 
             const { degree, indices, payload } = senderEncoder.generateDroplet(seed);
             const packet = packPacket(senderFileId, senderEncoder.K, senderEncoder.blockSize, seed, payload);
-            const grid2D = bytesToGridIndices(packet, senderLayout);
-            drawGridToCanvas(grid2D);
+
+            if (senderColorMode === 0) {
+                drawQRCodeToCanvas(packet);
+            } else {
+                const grid2D = bytesToGridIndices(packet, senderLayout);
+                drawGridToCanvas(grid2D);
+            }
 
             const elapsed = Math.max(0.001, (performance.now() - senderStartTime) / 1000.0);
             const kbSent = (senderTotalSent * packet.length) / 1024.0;
@@ -179,7 +234,6 @@ function animateSenderStream(currentTime) {
         }
     }
 
-    senderAnimationHandle = requestAnimationFrame(animateSenderStream);
 }
 
 function setupDragAndDrop() {

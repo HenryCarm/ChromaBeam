@@ -20,14 +20,14 @@ def bundle():
         css = f.read()
 
     # JS files for main UI thread in dependency order
-    main_js_files = ["fountain.js", "protocol.js", "matrix.js", "vision_engine.js", "sender.js", "receiver.js"]
+    main_js_files = ["qrcode.js", "jsQR.js", "fountain.js", "protocol.js", "matrix.js", "vision_engine.js", "sender.js", "receiver.js"]
     combined_js = ""
     for js_file in main_js_files:
         with open(os.path.join(WEB_DIR, js_file), "r", encoding="utf-8") as f:
             combined_js += f"\n/* --- {js_file} --- */\n" + f.read() + "\n"
 
     # Worker JS files: Dependencies + Worker core
-    worker_dep_files = ["fountain.js", "protocol.js", "matrix.js", "vision_engine.js"]
+    worker_dep_files = ["jsQR.js", "fountain.js", "protocol.js", "matrix.js", "vision_engine.js"]
     combined_worker_js = "/* ChromaBeam Standalone Offline Web Worker Engine */\n"
     for dep_file in worker_dep_files:
         with open(os.path.join(WEB_DIR, dep_file), "r", encoding="utf-8") as f:

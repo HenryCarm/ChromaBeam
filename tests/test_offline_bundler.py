@@ -85,7 +85,7 @@ class TestOfflineBundlerAndWorkerInlining(unittest.TestCase):
             hasLayout: sandbox.hasLayout
         }}));
         """
-        res = subprocess.run(["node", "-e", test_script], capture_output=True, text=True, check=True)
+        res = subprocess.run(["node", "-"], input=test_script, capture_output=True, text=True, check=True)
         out = json.loads(res.stdout.strip().split("\n")[-1])
         self.assertTrue(out["hasOnMessage"], "Worker failed to register self.onmessage")
         self.assertTrue(out["hasDecoder"], "Worker did not define LTDecoder in scope")
