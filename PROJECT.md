@@ -46,8 +46,8 @@ ChromaBeam is an optical air-gapped file transfer suite utilizing fountain codes
 | M1 | Anchor Standard & Core Color Matrix | Standardize anchor cores to White in `core/color_matrix.py` and `web/matrix.js`; verify multi-mode color encoding and calibration swatches. | None | DONE |
 | M2 | Python CV Tracker & 4-Way Homography | Implement `cv2.RETR_TREE` concentric anchor detection and 4-way rotation CRC32 validation in `desktop_receiver/tracker.py`, `desktop_receiver/receiver_gui.py`, and `desktop_app.py`. | M1 | DONE |
 | M3 | Web Worker Inlining & Offline Bundler | Implement inline Blob Worker in `build_offline_html.py`, `processFrameInline` in `web/receiver.js`, and verify offline HTML runner. | M1 | DONE |
-| M4 | Optical Loopback & E2E Test Suite | Implement `tests/test_optical_loopback.py` testing all 3 modes, 3 densities, 4 rotations, and optical perturbations. | M1, M2 | IN_PROGRESS |
-| M5 | Final Acceptance Gate & Forensic Audit | Run 100% E2E test suite, adversarial challenge testing, and forensic integrity audit. | M1, M2, M3, M4 | PLANNED |
+| M4 | Optical Loopback & E2E Test Suite | Implement `tests/test_optical_loopback.py` testing all 3 modes, 3 densities, 4 rotations, and optical perturbations. | M1, M2 | DONE |
+| M5 | Final Acceptance Gate & Forensic Audit | Run 100% E2E test suite, adversarial challenge testing, and forensic integrity audit. | M1, M2, M3, M4 | DONE |
 
 ## Interface Contracts
 
