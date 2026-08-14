@@ -223,7 +223,7 @@ class CameraWorkerThread(QThread):
 class UnifiedChromaBeamApp(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("ChromaBeam // Ultra-Fast Optical File Transfer Suite")
+        self.setWindowTitle("QR ChromaBeam // Ultra-Fast Optical File Transfer Suite")
         self.resize(980, 740)
         self.setMinimumSize(900, 660)
 
@@ -256,7 +256,7 @@ class UnifiedChromaBeamApp(QMainWindow):
         """)
 
         # Settings & Preference Persistence
-        self.settings = QSettings("ChromaBeam", "ChromaBeam")
+        self.settings = QSettings("QRChromaBeam", "QRChromaBeam")
 
         # Sender state (Defaults to 64x64 1-bit B&W)
         self.grid_size = int(self.settings.value("grid_size", 64))
