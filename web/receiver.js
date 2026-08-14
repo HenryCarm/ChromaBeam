@@ -245,11 +245,32 @@ function processReceiverFrame() {
         const gh = Math.floor(guideSide);
         const guideRect = { x: gx, y: gy, w: gw, h: gh };
 
-        // *** CRITICAL: Capture PRISTINE frame data BEFORE drawing any UI overlays ***
-        // The viewfinder mask, brackets, and binarizer filter MUST NOT contaminate
-        // the pixel data sent to the scanner worker for decoding!
+        // *** HIGH-SPEED OPTIMIZATION: Process at 480p-640p for sub-10ms decoding ***
         if (!workerIsBusy && !receiverIsComplete) {
-            const imgData = receiverCtx.getImageData(0, 0, vw, vh);
+            if (!window._procCanvas) {
+                window._procCanvas = document.createElement('canvas');
+                window._procCtx = window._procCanvas.getContext('2d', { willReadFrequently: true });
+            }
+            const MAX_DIM = 640;
+            let scale = 1.0;
+            if (vw > MAX_DIM || vh > MAX_DIM) {
+                scale = MAX_DIM / Math.max(vw, vh);
+            }
+            const pw = Math.round(vw * scale);
+            const ph = Math.round(vh * scale);
+            if (window._procCanvas.width !== pw || window._procCanvas.height !== ph) {
+                window._procCanvas.width = pw;
+                window._procCanvas.height = ph;
+            }
+            window._procCtx.drawImage(receiverVideo, 0, 0, pw, ph);
+            const imgData = window._procCtx.getImageData(0, 0, pw, ph);
+
+            const scaledGuide = {
+                x: Math.round(gx * scale),
+                y: Math.round(gy * scale),
+                w: Math.round(gw * scale),
+                h: Math.round(gh * scale)
+            };
 
             if (scannerWorker) {
                 const buffer = imgData.data.buffer; // Transferable zero-copy
@@ -257,12 +278,13 @@ function processReceiverFrame() {
                 scannerWorker.postMessage({
                     type: 'processFrame',
                     buffer,
-                    width: vw,
-                    height: vh,
-                    guideRect
+                    width: pw,
+                    height: ph,
+                    guideRect: scaledGuide,
+                    scaleFactor: 1.0 / scale
                 }, [buffer]);
             } else {
-                processFrameInline(imgData, vw, vh, guideRect);
+                processFrameInline(imgData, pw, ph, scaledGuide);
             }
         }
 
@@ -490,7 +512,11 @@ function handleWorkerMessage(e) {
     receiverPacketsCaught = res.caught || 0;
     receiverCRCErrors = res.drops || 0;
     receiverIsLocked = res.locked;
-    if (res.quad) receiverLastQuad = res.quad;
+    if (res.quad && res.scaleFactor && res.scaleFactor !== 1) {
+        receiverLastQuad = res.quad.map(p => ({ x: p.x * res.scaleFactor, y: p.y * res.scaleFactor }));
+    } else {
+        receiverLastQuad = res.quad || null;
+    }
     if (res.configLabel) receiverLastConfigLabel = res.configLabel;
     if (res.lumaMetrics) receiverLastLumaMetrics = res.lumaMetrics;
     if (res.latencyMs) receiverWorkerLatency = res.latencyMs;
