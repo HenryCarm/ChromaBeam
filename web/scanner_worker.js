@@ -1,12 +1,15 @@
 /**
- * ChromaBeam Background Web Worker Decoder & Vision Engine
- * Offloads 100% of CV, homography warping, multi-orientation testing,
- * and fountain decoding from the main UI thread.
+ * ChromaBeam Background Web Worker Decoder & Vision Engine v2
+ * Provides real-time diagnostic telemetry, multi-threshold decoding,
+ * and high-precision fountain solver progress reporting.
  */
 
-// Import core scripts if running as dedicated worker
 if (typeof importScripts === 'function') {
-    importScripts('fountain.js', 'protocol.js', 'matrix.js', 'vision_engine.js');
+    try {
+        importScripts('fountain.js', 'protocol.js', 'matrix.js', 'vision_engine.js');
+    } catch (e) {
+        console.error("[Worker] importScripts failed:", e);
+    }
 }
 
 const CANDIDATE_CONFIGS = [
@@ -41,7 +44,9 @@ function resetWorkerSession() {
 }
 
 self.onmessage = function(e) {
+    const startTime = performance.now();
     const msg = e.data;
+
     if (msg.type === 'reset') {
         resetWorkerSession();
         self.postMessage({ type: 'resetAck' });
@@ -49,51 +54,66 @@ self.onmessage = function(e) {
     }
 
     if (msg.type === 'processFrame') {
-        const { width, height, guideRect } = msg;
-        const imgData = {
-            data: new Uint8ClampedArray(msg.buffer),
-            width,
-            height
-        };
+        try {
+            const { width, height, guideRect } = msg;
+            const imgData = {
+                data: new Uint8ClampedArray(msg.buffer),
+                width,
+                height
+            };
 
-        if (workerIsComplete) {
-            self.postMessage({
-                type: 'frameResult',
-                locked: false,
-                caught: workerPacketsCaught,
-                drops: workerCRCErrors,
-                progress: 1.0,
-                isComplete: true
-            });
-            return;
-        }
-
-        // 1. Detect 4-point quadrilateral in 3D camera space
-        const quad = detectOpticalQuad(imgData, width, height, guideRect);
-
-        let decodedResult = null;
-        let matchedConfig = null;
-
-        if (quad) {
-            // Fast path: try locked config first
-            if (workerLockedConfig) {
-                const layout = CACHED_LAYOUTS[`${workerLockedConfig.grid}_${workerLockedConfig.mode}`];
-                const sampledGrid = sampleQuadGrid(imgData, width, height, quad, layout);
-                const res = decodeGridMultiOrientation(sampledGrid, layout);
-                if (res) {
-                    decodedResult = res;
-                    matchedConfig = workerLockedConfig;
-                } else {
-                    workerLockedConfig = null; // lost lock
-                }
+            if (workerIsComplete) {
+                self.postMessage({
+                    type: 'frameResult',
+                    locked: false,
+                    caught: workerPacketsCaught,
+                    drops: workerCRCErrors,
+                    progress: 1.0,
+                    progressPctFormatted: "100.0000%",
+                    isComplete: true,
+                    latencyMs: (performance.now() - startTime).toFixed(1)
+                });
+                return;
             }
 
-            // Sweep candidate configs if not locked
-            if (!decodedResult) {
-                for (const cfg of CANDIDATE_CONFIGS) {
+            // 1. Detect 4-point quadrilateral in 3D camera space
+            const detectRes = detectOpticalQuad(imgData, width, height, guideRect);
+            const quad = detectRes.quad;
+            const detectMethod = detectRes.method;
+
+            let decodedResult = null;
+            let matchedConfig = null;
+            let lastLumaMetrics = null;
+
+            if (quad) {
+                const configsToTest = workerLockedConfig ? [workerLockedConfig] : CANDIDATE_CONFIGS;
+
+                for (const cfg of configsToTest) {
                     const layout = CACHED_LAYOUTS[`${cfg.grid}_${cfg.mode}`];
-                    const sampledGrid = sampleQuadGrid(imgData, width, height, quad, layout);
-                    const res = decodeGridMultiOrientation(sampledGrid, layout);
+                    
+                    // Primary sample pass
+                    const sampleRes = sampleQuadGrid(imgData, width, height, quad, layout);
+                    lastLumaMetrics = {
+                        lumaThreshold: sampleRes.lumaThreshold,
+                        minLuma: sampleRes.minLuma,
+                        maxLuma: sampleRes.maxLuma,
+                        contrast: sampleRes.contrast
+                    };
+
+                    let res = decodeGridMultiOrientation(sampleRes.grid2D, layout);
+
+                    // Multi-threshold fallback for B&W mode (glare compensation)
+                    if (!res && cfg.mode === 0 && sampleRes.contrast > 30) {
+                        const altThresholds = [sampleRes.lumaThreshold - 15, sampleRes.lumaThreshold + 15];
+                        for (const altT of altThresholds) {
+                            if (altT > 20 && altT < 240) {
+                                const altSample = sampleQuadGrid(imgData, width, height, quad, layout, altT);
+                                res = decodeGridMultiOrientation(altSample.grid2D, layout);
+                                if (res) break;
+                            }
+                        }
+                    }
+
                     if (res) {
                         decodedResult = res;
                         matchedConfig = cfg;
@@ -101,68 +121,105 @@ self.onmessage = function(e) {
                         break;
                     }
                 }
-            }
-        }
 
-        let fileResult = null;
-
-        if (decodedResult) {
-            workerPacketsCaught++;
-            const { packet, rotationDeg } = decodedResult;
-            const { header, payload } = packet;
-
-            if (!workerDecoder || workerCurrentFileId !== header.fileId) {
-                workerCurrentFileId = header.fileId;
-                workerDecoder = new LTDecoder(header.totalBlocks, header.blockSize, header.totalBlocks * header.blockSize);
-                workerIsComplete = false;
-            }
-
-            const solved = workerDecoder.addDroplet(header.seed, payload);
-            const progress = workerDecoder.getProgress();
-
-            if (solved && !workerIsComplete) {
-                workerIsComplete = true;
-                const fullData = workerDecoder.reconstructData();
-                if (fullData) {
-                    const meta = unpackFileMetadata(fullData);
-                    let filename = "chromabeam_received.bin";
-                    let filePayload = fullData;
-                    if (meta) {
-                        filename = meta.filename;
-                        filePayload = fullData.subarray(meta.metadataHeaderLen, meta.metadataHeaderLen + meta.filesize);
-                    }
-                    fileResult = {
-                        filename,
-                        filesize: filePayload.length,
-                        payloadBuffer: filePayload.buffer
-                    };
+                if (!decodedResult && workerLockedConfig) {
+                    workerLockedConfig = null; // Lost lock, resume sweep next frame
                 }
             }
 
-            self.postMessage({
-                type: 'frameResult',
-                locked: true,
-                quad,
-                caught: workerPacketsCaught,
-                drops: workerCRCErrors,
-                progress,
-                configLabel: `${matchedConfig.label} (${rotationDeg}° rot)`,
-                rotationDeg,
-                isComplete: workerIsComplete,
-                fileResult
-            }, fileResult ? [fileResult.payloadBuffer] : []);
+            let fileResult = null;
+            const latencyMs = (performance.now() - startTime).toFixed(1);
 
-        } else {
-            if (quad) workerCRCErrors++;
+            if (decodedResult) {
+                workerPacketsCaught++;
+                const { packet, rotationDeg } = decodedResult;
+                const { header, payload } = packet;
+
+                if (!workerDecoder || workerCurrentFileId !== header.fileId) {
+                    workerCurrentFileId = header.fileId;
+                    workerDecoder = new LTDecoder(header.totalBlocks, header.blockSize, header.totalBlocks * header.blockSize);
+                    workerIsComplete = false;
+                }
+
+                const solved = workerDecoder.addDroplet(header.seed, payload);
+                const progressRatio = workerDecoder.getProgress();
+                const solvedCount = workerDecoder.solvedBlocks.size;
+                const totalCount = workerDecoder.K;
+                const progressPct = (progressRatio * 100).toFixed(4) + "%";
+
+                if (solved && !workerIsComplete) {
+                    workerIsComplete = true;
+                    const fullData = workerDecoder.reconstructData();
+                    if (fullData) {
+                        const meta = unpackFileMetadata(fullData);
+                        let filename = "chromabeam_received.bin";
+                        let filePayload = fullData;
+                        if (meta) {
+                            filename = meta.filename;
+                            filePayload = fullData.subarray(meta.metadataHeaderLen, meta.metadataHeaderLen + meta.filesize);
+                        }
+                        fileResult = {
+                            filename,
+                            filesize: filePayload.length,
+                            payloadBuffer: filePayload.buffer
+                        };
+                    }
+                }
+
+                self.postMessage({
+                    type: 'frameResult',
+                    locked: true,
+                    quad,
+                    detectMethod,
+                    caught: workerPacketsCaught,
+                    drops: workerCRCErrors,
+                    progress: progressRatio,
+                    progressPctFormatted: progressPct,
+                    solvedBlocks: solvedCount,
+                    totalBlocks: totalCount,
+                    configLabel: `${matchedConfig.label} (${rotationDeg}° rot)`,
+                    rotationDeg,
+                    lumaMetrics: lastLumaMetrics,
+                    latencyMs,
+                    isComplete: workerIsComplete,
+                    fileResult,
+                    logMsg: `[DECODE] Droplet seed #${header.seed} (K=${totalCount}) solved: ${solvedCount}/${totalCount} (${progressPct})`
+                }, fileResult ? [fileResult.payloadBuffer] : []);
+
+            } else {
+                if (quad) workerCRCErrors++;
+                const progressRatio = workerDecoder ? workerDecoder.getProgress() : 0;
+                const progressPct = (progressRatio * 100).toFixed(4) + "%";
+
+                self.postMessage({
+                    type: 'frameResult',
+                    locked: false,
+                    quad,
+                    detectMethod,
+                    caught: workerPacketsCaught,
+                    drops: workerCRCErrors,
+                    progress: progressRatio,
+                    progressPctFormatted: progressPct,
+                    solvedBlocks: workerDecoder ? workerDecoder.solvedBlocks.size : 0,
+                    totalBlocks: workerDecoder ? workerDecoder.K : 0,
+                    lumaMetrics: lastLumaMetrics,
+                    latencyMs,
+                    isComplete: workerIsComplete,
+                    fileResult: null,
+                    logMsg: null
+                });
+            }
+        } catch (err) {
+            console.error("[Worker] Frame processing exception:", err);
             self.postMessage({
                 type: 'frameResult',
                 locked: false,
-                quad,
                 caught: workerPacketsCaught,
-                drops: workerCRCErrors,
-                progress: workerDecoder ? workerDecoder.getProgress() : 0,
-                isComplete: workerIsComplete,
-                fileResult: null
+                drops: workerCRCErrors + 1,
+                progress: 0,
+                progressPctFormatted: "0.0000%",
+                error: err.message,
+                logMsg: `[ERROR] Worker Exception: ${err.message}`
             });
         }
     }

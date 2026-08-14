@@ -1,7 +1,13 @@
 /**
- * ChromaBeam Pure JavaScript 3D Perspective & Computer Vision Engine
- * Supports 4-point Projective Transform (Homography), 360° 4-Way Rotation Invariance,
- * Finder Pattern Detection, Multi-Pixel Bilinear Sampling, and Adaptive Thresholding.
+ * ChromaBeam Pure JavaScript 3D Perspective & Computer Vision Engine v2
+ * 
+ * Features:
+ * - 4-Point Projective Transform (Homography)
+ * - 360° 4-Way Rotation Invariance (0°, 90°, 180°, 270°)
+ * - Multi-Thresholding Strategy (Otsu, Adaptive Median, Contrast-Boosted)
+ * - Dynamic Lighting & Glare Compensation
+ * - Full Diagnostic Telemetry Export
+ * - Real-Time Debug Binarizer Renderer
  */
 
 class ProjectiveTransform {
@@ -34,7 +40,6 @@ class ProjectiveTransform {
             // Perspective transform
             const det = dx1 * dy2 - dx2 * dy1;
             if (Math.abs(det) < 1e-7) {
-                // Degenerate quad fallback to affine
                 this.a = x1 - x0; this.b = x3 - x0; this.c = x0;
                 this.d = y1 - y0; this.e = y3 - y0; this.f = y0;
                 this.g = 0; this.h = 0;
@@ -73,14 +78,11 @@ function rotateGrid2D(grid2D, rotationSteps) {
     for (let r = 0; r < N; r++) {
         for (let c = 0; c < N; c++) {
             if (rot === 1) {
-                // 90 deg clockwise
-                out[c][N - 1 - r] = grid2D[r][c];
+                out[c][N - 1 - r] = grid2D[r][c]; // 90 deg clockwise
             } else if (rot === 2) {
-                // 180 deg upside-down
-                out[N - 1 - r][N - 1 - c] = grid2D[r][c];
+                out[N - 1 - r][N - 1 - c] = grid2D[r][c]; // 180 deg upside-down
             } else if (rot === 3) {
-                // 270 deg clockwise (90 deg counter-clockwise)
-                out[N - 1 - c][r] = grid2D[r][c];
+                out[N - 1 - c][r] = grid2D[r][c]; // 270 deg clockwise
             }
         }
     }
@@ -91,7 +93,7 @@ function rotateGrid2D(grid2D, rotationSteps) {
  * Samples a grid from an arbitrary 4-point quadrilateral using 3D perspective mapping.
  * Uses 3x3 multi-pixel bilinear subpixel averaging to eliminate moire and camera noise.
  */
-function sampleQuadGrid(imgData, w, h, quad, layout) {
+function sampleQuadGrid(imgData, w, h, quad, layout, customThreshold = null) {
     const N = layout.gridSize;
     const colorMode = layout.colorMode;
     const palette = layout.palette;
@@ -100,41 +102,50 @@ function sampleQuadGrid(imgData, w, h, quad, layout) {
     const transform = new ProjectiveTransform(quad[0], quad[1], quad[2], quad[3]);
     const grid2D = Array.from({ length: N }, () => new Uint8Array(N));
 
-    // Sample pixels across grid to compute Otsu threshold for B&W
+    let minLuma = 255;
+    let maxLuma = 0;
     let lumaThreshold = 128;
+
+    // Fast sampling pass to compute luminance distribution & Otsu threshold
     if (colorMode === 0) {
-        const samples = [];
-        const step = Math.max(1, Math.floor(N / 8));
-        for (let r = 0; r < N; r += step) {
-            for (let c = 0; c < N; c += step) {
-                const pt = transform.transform((c + 0.5) / N, (r + 0.5) / N);
-                const px = Math.floor(pt.x);
-                const py = Math.floor(pt.y);
-                if (px >= 0 && px < w && py >= 0 && py < h) {
-                    const idx = (py * w + px) * 4;
-                    const luma = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
-                    samples.push(luma);
+        if (customThreshold !== null) {
+            lumaThreshold = customThreshold;
+        } else {
+            const samples = [];
+            const step = Math.max(1, Math.floor(N / 8));
+            for (let r = 0; r < N; r += step) {
+                for (let c = 0; c < N; c += step) {
+                    const pt = transform.transform((c + 0.5) / N, (r + 0.5) / N);
+                    const px = Math.floor(pt.x);
+                    const py = Math.floor(pt.y);
+                    if (px >= 0 && px < w && py >= 0 && py < h) {
+                        const idx = (py * w + px) * 4;
+                        const luma = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
+                        samples.push(luma);
+                        if (luma < minLuma) minLuma = luma;
+                        if (luma > maxLuma) maxLuma = luma;
+                    }
                 }
             }
-        }
-        if (samples.length > 20) {
-            lumaThreshold = calculateOtsuFromLumaArray(samples);
+            if (samples.length > 10) {
+                lumaThreshold = calculateOtsuFromLumaArray(samples);
+            }
         }
     }
 
+    // Main cell sampling pass
     for (let r = 0; r < N; r++) {
         const v = (r + 0.5) / N;
         for (let c = 0; c < N; c++) {
             const u = (c + 0.5) / N;
             
-            // Center point
             const pt = transform.transform(u, v);
             const cx = pt.x;
             const cy = pt.y;
 
-            // Approximate cell radius in camera pixels
+            // Approximate subpixel sampling radius
             const ptRight = transform.transform((c + 1.0) / N, v);
-            const cellRadius = Math.max(1.0, Math.hypot(ptRight.x - cx, ptRight.y - cy) * 0.25);
+            const cellRadius = Math.max(1.0, Math.hypot(ptRight.x - cx, ptRight.y - cy) * 0.22);
 
             let avgR = 0, avgG = 0, avgB = 0, count = 0;
             const offsets = [-cellRadius, 0, cellRadius];
@@ -178,7 +189,13 @@ function sampleQuadGrid(imgData, w, h, quad, layout) {
         }
     }
 
-    return grid2D;
+    return {
+        grid2D,
+        lumaThreshold,
+        minLuma: Math.round(minLuma),
+        maxLuma: Math.round(maxLuma),
+        contrast: Math.round(maxLuma - minLuma)
+    };
 }
 
 function calculateOtsuFromLumaArray(samples) {
@@ -215,73 +232,77 @@ function calculateOtsuFromLumaArray(samples) {
 
 /**
  * Universal Quad & Finder Pattern Detector.
- * Searches the camera frame for:
- * 1. Full 4-Anchor Pattern Finder (concentric square anchors 1:1:1:1:1)
- * 2. High-contrast square boundaries
- * 3. Guide region fallback
+ * Returns { quad, method, confidence }
  */
 function detectOpticalQuad(imgData, w, h, guideRect) {
     const data = imgData.data;
 
-    // Fast pass: scan for 4 corner anchor clusters
+    // 1. First Pass: Anchor Pattern Matching (1:1:1:1:1 concentric squares)
     const anchorClusters = findAnchorClusters(data, w, h);
     if (anchorClusters && anchorClusters.length === 4) {
         const orderedAnchors = orderQuadPointsClockwise(anchorClusters);
-        // Expand from anchor centers to outer grid corners
-        // Anchors are 5x5 cells centered at (2.5, 2.5) cells in an N-grid
-        // Outer corners are extrapolated slightly (~6%) outward
         const cx = (orderedAnchors[0].x + orderedAnchors[1].x + orderedAnchors[2].x + orderedAnchors[3].x) / 4;
         const cy = (orderedAnchors[0].y + orderedAnchors[1].y + orderedAnchors[2].y + orderedAnchors[3].y) / 4;
-        const scale = 1.08; // extrapolate to outer edge of the anchors
+        const scale = 1.08;
 
-        return orderedAnchors.map(pt => ({
+        const quad = orderedAnchors.map(pt => ({
             x: Math.max(0, Math.min(w - 1, cx + (pt.x - cx) * scale)),
             y: Math.max(0, Math.min(h - 1, cy + (pt.y - cy) * scale))
         }));
+
+        return { quad, method: '4-Anchor Finder', confidence: 0.95 };
     }
 
-    // Secondary pass: Detect high contrast bounds within / around guide
+    // 2. Second Pass: Adaptive dynamic bounds inside guide region
     const gx = guideRect ? guideRect.x : Math.floor(w * 0.1);
     const gy = guideRect ? guideRect.y : Math.floor(h * 0.1);
     const gw = guideRect ? guideRect.w : Math.floor(w * 0.8);
     const gh = guideRect ? guideRect.h : Math.floor(h * 0.8);
 
-    const bounds = detectHighContrastBounds(data, w, h, gx, gy, gw, gh);
+    const bounds = detectAdaptiveContrastBounds(data, w, h, gx, gy, gw, gh);
     if (bounds) {
-        return [
-            { x: bounds.x, y: bounds.y },                          // TL
-            { x: bounds.x + bounds.w, y: bounds.y },              // TR
-            { x: bounds.x + bounds.w, y: bounds.y + bounds.h },   // BR
-            { x: bounds.x, y: bounds.y + bounds.h }               // BL
+        const quad = [
+            { x: bounds.x, y: bounds.y },
+            { x: bounds.x + bounds.w, y: bounds.y },
+            { x: bounds.x + bounds.w, y: bounds.y + bounds.h },
+            { x: bounds.x, y: bounds.y + bounds.h }
         ];
+        return { quad, method: 'Adaptive Boundary', confidence: 0.80 };
     }
 
-    // Default guide quad
-    return [
+    // 3. Fallback: Guide Region Quad
+    const defaultQuad = [
         { x: gx, y: gy },
         { x: gx + gw, y: gy },
         { x: gx + gw, y: gy + gh },
         { x: gx, y: gy + gh }
     ];
+    return { quad: defaultQuad, method: 'Viewfinder ROI', confidence: 0.50 };
 }
 
-/**
- * Searches for concentric anchor patterns across scan lines
- */
 function findAnchorClusters(data, w, h) {
     const candidates = [];
-    const stepY = Math.max(4, Math.floor(h / 80));
+    const stepY = Math.max(4, Math.floor(h / 90));
 
-    // Scan horizontal lines for 1:1:1:1:1 or 1:3:1 white/black/white transitions
+    // Dynamic contrast determination
+    let minL = 255, maxL = 0;
+    for (let i = 0; i < Math.min(data.length, 20000); i += 16) {
+        const l = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+        if (l < minL) minL = l;
+        if (l > maxL) maxL = l;
+    }
+    const midLuma = (minL + maxL) * 0.5;
+    if (maxL - minL < 30) return null; // Too low contrast to distinguish anchors
+
     for (let y = 10; y < h - 10; y += stepY) {
         let state = 0;
         let counts = [0, 0, 0, 0, 0];
-        let lastColor = 0; // 0: black, 1: white
+        let lastColor = 0;
 
         for (let x = 10; x < w - 10; x += 2) {
             const idx = (y * w + x) * 4;
             const luma = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
-            const color = (luma > 140) ? 1 : 0;
+            const color = (luma > midLuma) ? 1 : 0;
 
             if (x === 10) {
                 lastColor = color;
@@ -297,12 +318,11 @@ function findAnchorClusters(data, w, h) {
                     state++;
                     counts[state] = 1;
                 } else {
-                    // Check if counts match white:black:white:black:white (1:1:1:1:1)
-                    if (counts[0] > 2 && counts[1] > 2 && counts[2] > 2 && counts[3] > 2 && counts[4] > 2) {
+                    if (counts[0] > 1 && counts[1] > 1 && counts[2] > 1 && counts[3] > 1 && counts[4] > 1) {
                         const total = counts[0] + counts[1] + counts[2] + counts[3] + counts[4];
                         const avg = total / 5.0;
                         const maxDiff = Math.max(...counts.map(c => Math.abs(c - avg)));
-                        if (maxDiff < avg * 1.5 && total >= 15 && total < w * 0.4) {
+                        if (maxDiff < avg * 1.8 && total >= 12 && total < w * 0.45) {
                             const centerX = x - (counts[4] + counts[3] + counts[2] / 2);
                             candidates.push({ x: centerX, y });
                         }
@@ -321,9 +341,8 @@ function findAnchorClusters(data, w, h) {
 
     if (candidates.length < 4) return null;
 
-    // Cluster nearby candidates
     const clusters = [];
-    const radius = Math.min(w, h) * 0.08;
+    const radius = Math.min(w, h) * 0.09;
 
     for (const pt of candidates) {
         let found = false;
@@ -341,16 +360,14 @@ function findAnchorClusters(data, w, h) {
         }
     }
 
-    // Sort by count descending and take top 4 clusters if separated
     clusters.sort((a, b) => b.count - a.count);
     if (clusters.length >= 4) {
         const top4 = clusters.slice(0, 4);
-        // Verify they form a convex quadrilateral
-        const minDistance = Math.min(w, h) * 0.15;
+        const minDistance = Math.min(w, h) * 0.12;
         for (let i = 0; i < 4; i++) {
             for (let j = i + 1; j < 4; j++) {
                 if (Math.hypot(top4[i].x - top4[j].x, top4[i].y - top4[j].y) < minDistance) {
-                    return null; // too close, degenerate
+                    return null;
                 }
             }
         }
@@ -360,9 +377,6 @@ function findAnchorClusters(data, w, h) {
     return null;
 }
 
-/**
- * Orders 4 points clockwise starting with Top-Left
- */
 function orderQuadPointsClockwise(pts) {
     const cx = (pts[0].x + pts[1].x + pts[2].x + pts[3].x) / 4;
     const cy = (pts[0].y + pts[1].y + pts[2].y + pts[3].y) / 4;
@@ -373,7 +387,6 @@ function orderQuadPointsClockwise(pts) {
         return angleA - angleB;
     });
 
-    // Find the one closest to top-left (-3*PI/4)
     let tlIdx = 0;
     let minSum = Infinity;
     for (let i = 0; i < 4; i++) {
@@ -392,9 +405,23 @@ function orderQuadPointsClockwise(pts) {
     ];
 }
 
-function detectHighContrastBounds(data, imgW, imgH, gx, gy, gw, gh) {
-    const BRIGHT_THRESHOLD = 150;
-    const MIN_BRIGHT = 3;
+function detectAdaptiveContrastBounds(data, imgW, imgH, gx, gy, gw, gh) {
+    // Dynamic sample of luma in guide region
+    let minLuma = 255, maxLuma = 0;
+    for (let y = gy; y < gy + gh; y += 8) {
+        for (let x = gx; x < gx + gw; x += 8) {
+            const idx = (y * imgW + x) * 4;
+            const l = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
+            if (l < minLuma) minLuma = l;
+            if (l > maxLuma) maxLuma = l;
+        }
+    }
+
+    const contrast = maxLuma - minLuma;
+    if (contrast < 35) return null; // Insufficient lighting contrast
+
+    const threshold = minLuma + contrast * 0.45;
+    const MIN_BRIGHT = 2;
     let top = -1, bottom = -1, left = -1, right = -1;
 
     for (let y = gy; y < gy + gh; y += 2) {
@@ -402,7 +429,7 @@ function detectHighContrastBounds(data, imgW, imgH, gx, gy, gw, gh) {
         for (let x = gx; x < gx + gw; x += 3) {
             const idx = (y * imgW + x) * 4;
             const luma = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
-            if (luma > BRIGHT_THRESHOLD) bCount++;
+            if (luma > threshold) bCount++;
         }
         if (bCount >= MIN_BRIGHT) { top = y; break; }
     }
@@ -412,7 +439,7 @@ function detectHighContrastBounds(data, imgW, imgH, gx, gy, gw, gh) {
         for (let x = gx; x < gx + gw; x += 3) {
             const idx = (y * imgW + x) * 4;
             const luma = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
-            if (luma > BRIGHT_THRESHOLD) bCount++;
+            if (luma > threshold) bCount++;
         }
         if (bCount >= MIN_BRIGHT) { bottom = y; break; }
     }
@@ -422,7 +449,7 @@ function detectHighContrastBounds(data, imgW, imgH, gx, gy, gw, gh) {
         for (let y = gy; y < gy + gh; y += 3) {
             const idx = (y * imgW + x) * 4;
             const luma = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
-            if (luma > BRIGHT_THRESHOLD) bCount++;
+            if (luma > threshold) bCount++;
         }
         if (bCount >= MIN_BRIGHT) { left = x; break; }
     }
@@ -432,7 +459,7 @@ function detectHighContrastBounds(data, imgW, imgH, gx, gy, gw, gh) {
         for (let y = gy; y < gy + gh; y += 3) {
             const idx = (y * imgW + x) * 4;
             const luma = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
-            if (luma > BRIGHT_THRESHOLD) bCount++;
+            if (luma > threshold) bCount++;
         }
         if (bCount >= MIN_BRIGHT) { right = x; break; }
     }
@@ -456,7 +483,7 @@ function detectHighContrastBounds(data, imgW, imgH, gx, gy, gw, gh) {
 
 /**
  * Fast Multi-Orientation Decoder.
- * Tries 0°, 90°, 180°, 270° rotations of the sampled grid and returns the valid packet + rotation angle.
+ * Tries 0°, 90°, 180°, 270° rotations of the sampled grid.
  */
 function decodeGridMultiOrientation(sampledGrid, layout) {
     for (let rot = 0; rot < 4; rot++) {
