@@ -28,8 +28,15 @@ const CANDIDATE_CONFIGS = [
     { grid: 64, mode: 0, label: '64×64 B&W' },
     { grid: 32, mode: 1, label: '32×32 4-Color' },
     { grid: 48, mode: 1, label: '48×48 4-Color' },
+    { grid: 64, mode: 1, label: '64×64 4-Color' },
+    { grid: 128, mode: 1, label: '128×128 4-Color' },
     { grid: 48, mode: 2, label: '48×48 8-Color' },
     { grid: 64, mode: 2, label: '64×64 8-Color' },
+    { grid: 128, mode: 2, label: '128×128 8-Color' },
+    { grid: 256, mode: 2, label: '256×256 8-Color' },
+    { grid: 512, mode: 2, label: '512×512 8-Color' },
+    { grid: 1024, mode: 2, label: '1024×1024 8-Color' },
+    { grid: 2048, mode: 2, label: '2048×2048 8-Color' },
 ];
 
 let CACHED_LAYOUTS = {};
@@ -245,9 +252,18 @@ self.onmessage = function(e) {
             // PASS 2: Custom Multi-Color Optical Matrix Detection (3D Homography)
             // =========================================================================
             if (!decodedResult) {
-                const detectRes = detectOpticalQuad(imgData, width, height, guideRect);
-                quad = detectRes.quad;
-                detectMethod = detectRes.method;
+                let triedLock = false;
+                
+                // Tier 1: Steady Lock (Reuse last known quad)
+                if (workerLastLockedQuad) {
+                    quad = workerLastLockedQuad;
+                    detectMethod = "Color Matrix (Track Lock)";
+                    triedLock = true;
+                } else {
+                    const detectRes = detectOpticalQuad(imgData, width, height, guideRect);
+                    quad = detectRes.quad;
+                    detectMethod = detectRes.method;
+                }
 
                 if (quad) {
                     const configsToTest = workerLockedConfig ? [workerLockedConfig] : CANDIDATE_CONFIGS;
@@ -271,12 +287,45 @@ self.onmessage = function(e) {
                             decodedResult = res;
                             matchedConfigLabel = `${cfg.label} (${res.rotationDeg}° rot)`;
                             workerLockedConfig = cfg;
+                            workerLastLockedQuad = quad;
+                            workerLockStreak++;
                             break;
                         }
                     }
 
-                    if (!decodedResult && workerLockedConfig) {
-                        workerLockedConfig = null;
+                    if (!decodedResult) {
+                        // If we failed with lock, fall back to re-detecting
+                        if (triedLock) {
+                            workerLockStreak--;
+                            if (workerLockStreak <= 0) workerLastLockedQuad = null;
+                            
+                            const detectRes = detectOpticalQuad(imgData, width, height, guideRect);
+                            quad = detectRes.quad;
+                            detectMethod = detectRes.method;
+                            
+                            if (quad) {
+                                for (const cfg of configsToTest) {
+                                    const layoutKey = `${cfg.grid}_${cfg.mode}`;
+                                    const layout = CACHED_LAYOUTS[layoutKey];
+                                    if (!layout) continue;
+                                    
+                                    const sampleRes = sampleQuadGrid(imgData, width, height, quad, layout);
+                                    let res = decodeGridMultiOrientation(sampleRes.grid2D, layout);
+                                    if (res) {
+                                        decodedResult = res;
+                                        matchedConfigLabel = `${cfg.label} (${res.rotationDeg}° rot)`;
+                                        workerLockedConfig = cfg;
+                                        workerLastLockedQuad = quad;
+                                        workerLockStreak++;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        
+                        if (!decodedResult && workerLockedConfig) {
+                            workerLockedConfig = null;
+                        }
                     }
                 }
             }
@@ -347,7 +396,10 @@ self.onmessage = function(e) {
                 }, fileResult ? [fileResult.payloadBuffer] : []);
 
             } else {
-                if (quad) workerCRCErrors++;
+                if (quad) {
+                    workerCRCErrors++;
+                    if (verbose) log(`[F${frameNum}] ⚠️ CRC ERROR (Motion blur or poor lighting). Packet Dropped.`);
+                }
                 const progressRatio = workerDecoder ? workerDecoder.getProgress() : 0;
                 const progressPct = (progressRatio * 100).toFixed(4) + "%";
                 const allLogs = logLines.join('\n');

@@ -380,7 +380,7 @@ function find2DAnchorQuad(data, w, h) {
         }
     }
 
-    if (allCandidates.length < 4) return null;
+    if (allCandidates.length < 3) return null;
 
     // 4. Cluster Anchor Points
     const clusters = [];
@@ -459,29 +459,41 @@ function checkVerticalCrossSection(gray, w, h, cx, startY, T, expectedW) {
 }
 
 function orderQuadPointsClockwise(pts) {
-    const cx = (pts[0].x + pts[1].x + pts[2].x + pts[3].x) / 4;
-    const cy = (pts[0].y + pts[1].y + pts[2].y + pts[3].y) / 4;
+    // Determine which point is TL by finding the pair with the longest distance (TR and BL)
+    let d01 = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+    let d12 = Math.hypot(pts[1].x - pts[2].x, pts[1].y - pts[2].y);
+    let d02 = Math.hypot(pts[0].x - pts[2].x, pts[0].y - pts[2].y);
 
-    const sorted = pts.slice().sort((a, b) => {
-        return Math.atan2(a.y - cy, a.x - cx) - Math.atan2(b.y - cy, b.x - cx);
-    });
-
-    let tlIdx = 0, minSum = Infinity;
-    for (let i = 0; i < 4; i++) {
-        const s = sorted[i].x + sorted[i].y;
-        if (s < minSum) { minSum = s; tlIdx = i; }
+    let tl, a, b;
+    if (d01 >= d12 && d01 >= d02) {
+        tl = pts[2]; a = pts[0]; b = pts[1];
+    } else if (d12 >= d01 && d12 >= d02) {
+        tl = pts[0]; a = pts[1]; b = pts[2];
+    } else {
+        tl = pts[1]; a = pts[0]; b = pts[2];
     }
 
-    return [
-        sorted[tlIdx],
-        sorted[(tlIdx + 1) % 4],
-        sorted[(tlIdx + 2) % 4],
-        sorted[(tlIdx + 3) % 4]
-    ];
+    // Determine TR and BL using 2D cross product
+    // (A - TL) x (B - TL)
+    let cross = (a.x - tl.x) * (b.y - tl.y) - (a.y - tl.y) * (b.x - tl.x);
+    let tr, bl;
+    if (cross > 0) {
+        tr = a; bl = b;
+    } else {
+        tr = b; bl = a;
+    }
+
+    // Extrapolate BR
+    let br = {
+        x: tr.x + bl.x - tl.x,
+        y: tr.y + bl.y - tl.y
+    };
+
+    return [tl, tr, br, bl];
 }
 
 function findBestAnchorQuad(clusters, imgW, imgH) {
-    if (clusters.length < 4) return null;
+    if (clusters.length < 3) return null;
     const minQuadArea = (imgW * imgH) * 0.005; // At least 0.5% of camera frame
     const N = Math.min(clusters.length, 16);
     let bestQuad = null;
@@ -490,57 +502,54 @@ function findBestAnchorQuad(clusters, imgW, imgH) {
     for (let i = 0; i < N; i++) {
         for (let j = i + 1; j < N; j++) {
             for (let k = j + 1; k < N; k++) {
-                for (let l = k + 1; l < N; l++) {
-                    const combo = [
-                        { x: clusters[i].x, y: clusters[i].y, size: clusters[i].size },
-                        { x: clusters[j].x, y: clusters[j].y, size: clusters[j].size },
-                        { x: clusters[k].x, y: clusters[k].y, size: clusters[k].size },
-                        { x: clusters[l].x, y: clusters[l].y, size: clusters[l].size }
-                    ];
+                const combo = [
+                    { x: clusters[i].x, y: clusters[i].y, size: clusters[i].size },
+                    { x: clusters[j].x, y: clusters[j].y, size: clusters[j].size },
+                    { x: clusters[k].x, y: clusters[k].y, size: clusters[k].size }
+                ];
 
-                    const ordered = orderQuadPointsClockwise(combo);
+                const ordered = orderQuadPointsClockwise(combo);
 
-                    // 1. Calculate Quad Area (Shoelace formula)
-                    const area = 0.5 * Math.abs(
-                        (ordered[0].x * ordered[1].y - ordered[1].x * ordered[0].y) +
-                        (ordered[1].x * ordered[2].y - ordered[2].x * ordered[1].y) +
-                        (ordered[2].x * ordered[3].y - ordered[3].x * ordered[2].y) +
-                        (ordered[3].x * ordered[0].y - ordered[0].x * ordered[3].y)
-                    );
+                // 1. Calculate Quad Area (Shoelace formula)
+                const area = 0.5 * Math.abs(
+                    (ordered[0].x * ordered[1].y - ordered[1].x * ordered[0].y) +
+                    (ordered[1].x * ordered[2].y - ordered[2].x * ordered[1].y) +
+                    (ordered[2].x * ordered[3].y - ordered[3].x * ordered[2].y) +
+                    (ordered[3].x * ordered[0].y - ordered[0].x * ordered[3].y)
+                );
 
-                    if (area < minQuadArea) continue;
+                if (area < minQuadArea) continue;
 
-                    // 2. Check side lengths
-                    const d0 = Math.hypot(ordered[0].x - ordered[1].x, ordered[0].y - ordered[1].y);
-                    const d1 = Math.hypot(ordered[1].x - ordered[2].x, ordered[1].y - ordered[2].y);
-                    const d2 = Math.hypot(ordered[2].x - ordered[3].x, ordered[2].y - ordered[3].y);
-                    const d3 = Math.hypot(ordered[3].x - ordered[0].x, ordered[3].y - ordered[0].y);
+                // 2. Check side lengths
+                const d0 = Math.hypot(ordered[0].x - ordered[1].x, ordered[0].y - ordered[1].y);
+                const d1 = Math.hypot(ordered[1].x - ordered[2].x, ordered[1].y - ordered[2].y);
+                const d2 = Math.hypot(ordered[2].x - ordered[3].x, ordered[2].y - ordered[3].y);
+                const d3 = Math.hypot(ordered[3].x - ordered[0].x, ordered[3].y - ordered[0].y);
 
-                    const sides = [d0, d1, d2, d3];
-                    const sMin = Math.min(...sides);
-                    const sMax = Math.max(...sides);
-                    if (sMax === 0 || (sMin / sMax) < 0.25) continue;
+                const sides = [d0, d1, d2, d3];
+                const sMin = Math.min(...sides);
+                const sMax = Math.max(...sides);
+                if (sMax === 0 || (sMin / sMax) < 0.25) continue;
 
-                    // 3. Check diagonals
-                    const diag1 = Math.hypot(ordered[0].x - ordered[2].x, ordered[0].y - ordered[2].y);
-                    const diag2 = Math.hypot(ordered[1].x - ordered[3].x, ordered[1].y - ordered[3].y);
-                    const dMin = Math.min(diag1, diag2);
-                    const dMax = Math.max(diag1, diag2);
-                    if (dMax === 0 || (dMin / dMax) < 0.35) continue;
+                // 3. Check diagonals
+                const diag1 = Math.hypot(ordered[0].x - ordered[2].x, ordered[0].y - ordered[2].y);
+                const diag2 = Math.hypot(ordered[1].x - ordered[3].x, ordered[1].y - ordered[3].y);
+                const dMin = Math.min(diag1, diag2);
+                const dMax = Math.max(diag1, diag2);
+                if (dMax === 0 || (dMin / dMax) < 0.35) continue;
 
-                    // 4. Check anchor size uniformity
-                    const sizes = [combo[0].size, combo[1].size, combo[2].size, combo[3].size];
-                    const szMin = Math.min(...sizes);
-                    const szMax = Math.max(...sizes);
-                    if (szMax === 0 || (szMin / szMax) < 0.15) continue;
+                // 4. Check anchor size uniformity (only 3 anchors tested)
+                const sizes = [combo[0].size, combo[1].size, combo[2].size];
+                const szMin = Math.min(...sizes);
+                const szMax = Math.max(...sizes);
+                if (szMax === 0 || (szMin / szMax) < 0.15) continue;
 
-                    // 5. Score = Area * side_regularity * diag_regularity * sqrt(size_uniformity)
-                    const score = area * (sMin / sMax) * (dMin / dMax) * Math.sqrt(szMin / szMax);
+                // 5. Score = Area * side_regularity * diag_regularity * sqrt(size_uniformity)
+                const score = area * (sMin / sMax) * (dMin / dMax) * Math.sqrt(szMin / szMax);
 
-                    if (score > bestScore) {
-                        bestScore = score;
-                        bestQuad = ordered;
-                    }
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestQuad = ordered;
                 }
             }
         }

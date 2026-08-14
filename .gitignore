@@ -12,6 +12,7 @@ ENV/
 *.build/
 *.dist/
 *.onefile-build/
+dist/
 .buildozer/
 bin/
 *.apk

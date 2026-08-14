@@ -2,8 +2,8 @@
  * ChromaBeam Web Sender Engine with Grandma Presets & Multi-Mode Support
  */
 
-let senderGridSize = 32;
-let senderColorMode = 0; // Default to Potato Mode (0: B&W) for instant bulletproof compatibility!
+let senderGridSize = 64; // Default 64x64
+let senderColorMode = 0; // Default 1-Bit B&W
 let senderLayout = new JSColorMatrixLayout(senderGridSize, senderColorMode);
 let senderEncoder = null;
 let senderFileBytes = null;
@@ -20,22 +20,70 @@ let senderLastFrameTime = 0;
 const senderCanvas = document.getElementById('senderCanvas');
 const senderCtx = senderCanvas ? senderCanvas.getContext('2d', { alpha: false }) : null;
 
+function saveSenderPreferences() {
+    try {
+        localStorage.setItem('chromabeam_grid', senderGridSize);
+        localStorage.setItem('chromabeam_mode', senderColorMode);
+        localStorage.setItem('chromabeam_fps', senderTargetFPS);
+    } catch (_) {}
+}
+
+function loadSenderPreferences() {
+    try {
+        const savedGrid = localStorage.getItem('chromabeam_grid');
+        const savedMode = localStorage.getItem('chromabeam_mode');
+        const savedFps = localStorage.getItem('chromabeam_fps');
+        if (savedGrid) senderGridSize = parseInt(savedGrid, 10);
+        if (savedMode) senderColorMode = parseInt(savedMode, 10);
+        if (savedFps) senderTargetFPS = parseInt(savedFps, 10);
+    } catch (_) {}
+}
+
 function initSender() {
     setupDragAndDrop();
     loadDemoSenderPayload();
-    applyPreset('potato'); // Start with Potato Mode for 100% immediate out-of-the-box reliability!
+    loadSenderPreferences();
+    syncSenderUIToState();
     renderIdleSenderFrame();
 }
 
-function applyPreset(presetName) {
+function syncSenderUIToState() {
     document.querySelectorAll('.preset-card').forEach(c => c.classList.remove('active'));
-    const card = document.getElementById(`preset_${presetName}`);
-    if (card) card.classList.add('active');
+    if (senderColorMode === 0 && senderGridSize === 64) {
+        const p = document.getElementById('preset_potato');
+        if (p) p.classList.add('active');
+    } else if (senderColorMode === 1 && senderGridSize === 48) {
+        const p = document.getElementById('preset_balanced');
+        if (p) p.classList.add('active');
+    } else if (senderColorMode === 2 && senderGridSize === 64) {
+        const p = document.getElementById('preset_turbo');
+        if (p) p.classList.add('active');
+    }
 
+    const gridSel = document.getElementById('senderGridSelect');
+    if (gridSel) gridSel.value = senderGridSize;
+    const modeSel = document.getElementById('senderModeSelect');
+    if (modeSel) modeSel.value = senderColorMode;
+    const fpsRng = document.getElementById('senderFpsRange');
+    if (fpsRng) {
+        fpsRng.value = senderTargetFPS;
+        const lbl = document.getElementById('senderFpsLabel');
+        if (lbl) lbl.textContent = `Frame Rate: ${senderTargetFPS} FPS`;
+    }
+
+    senderLayout = new JSColorMatrixLayout(senderGridSize, senderColorMode);
+    if (senderFileBytes) {
+        setSenderPayload(senderFileBytes, senderFilename);
+    } else {
+        renderIdleSenderFrame();
+    }
+}
+
+function applyPreset(presetName) {
     if (presetName === 'potato') {
-        // Potato Camera: 1-bit Monochrome B&W, 32x32, 15 FPS
+        // Default: 1-bit Monochrome B&W, 64x64, 15 FPS
         senderColorMode = 0;
-        senderGridSize = 32;
+        senderGridSize = 64;
         senderTargetFPS = 15;
     } else if (presetName === 'balanced') {
         // Balanced: 2-bit 4-Color, 48x48, 25 FPS
@@ -49,23 +97,8 @@ function applyPreset(presetName) {
         senderTargetFPS = 45;
     }
 
-    // Sync Pro Mode controls
-    const gridSel = document.getElementById('senderGridSelect');
-    if (gridSel) gridSel.value = senderGridSize;
-    const modeSel = document.getElementById('senderModeSelect');
-    if (modeSel) modeSel.value = senderColorMode;
-    const fpsRng = document.getElementById('senderFpsRange');
-    if (fpsRng) {
-        fpsRng.value = senderTargetFPS;
-        document.getElementById('senderFpsLabel').textContent = `Frame Rate: ${senderTargetFPS} FPS`;
-    }
-
-    senderLayout = new JSColorMatrixLayout(senderGridSize, senderColorMode);
-    if (senderFileBytes) {
-        setSenderPayload(senderFileBytes, senderFilename);
-    } else {
-        renderIdleSenderFrame();
-    }
+    saveSenderPreferences();
+    syncSenderUIToState();
 }
 
 function toggleProMode() {
@@ -285,28 +318,25 @@ function handleSelectedFile(file) {
 
 function updateSenderGridDensity(size) {
     senderGridSize = size;
-    senderLayout = new JSColorMatrixLayout(senderGridSize, senderColorMode);
-    if (senderFileBytes) setSenderPayload(senderFileBytes, senderFilename);
-    else renderIdleSenderFrame();
+    saveSenderPreferences();
+    syncSenderUIToState();
 }
 
 function updateSenderColorMode(mode) {
     senderColorMode = mode;
-    senderLayout = new JSColorMatrixLayout(senderGridSize, senderColorMode);
-    if (senderFileBytes) setSenderPayload(senderFileBytes, senderFilename);
-    else renderIdleSenderFrame();
+    saveSenderPreferences();
+    syncSenderUIToState();
 }
 
 function updateSenderFPS(fps) {
     senderTargetFPS = fps;
+    saveSenderPreferences();
     document.getElementById('senderFpsLabel').textContent = `Frame Rate: ${fps} FPS`;
 }
 
 function toggleSenderFullscreen() {
-    const container = document.getElementById('senderCanvasContainer');
-    if (!document.fullscreenElement) {
-        if (container.requestFullscreen) container.requestFullscreen();
-    } else {
-        if (document.exitFullscreen) document.exitFullscreen();
+    const canvas = document.getElementById('senderCanvas');
+    if (canvas) {
+        canvas.classList.toggle('fullscreen-canvas');
     }
 }
