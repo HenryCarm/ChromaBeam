@@ -63,6 +63,17 @@ class JSColorMatrixLayout {
         this.maxPayloadBytes = Math.floor(this.maxPayloadBits / 8);
     }
 
+    get anchorCenters() {
+        const N = this.gridSize;
+        const c = 2.5 / N;
+        return [
+            { x: c, y: c },              // Top-Left
+            { x: 1 - c, y: c },          // Top-Right
+            { x: 1 - c, y: 1 - c },      // Bottom-Right
+            { x: c, y: 1 - c }           // Bottom-Left
+        ];
+    }
+
     renderAnchors(grid2D) {
         const s = this.anchorSize;
         const N = this.gridSize;
@@ -70,22 +81,24 @@ class JSColorMatrixLayout {
         const black = 0;
 
         // 1:1:1:1:1 Concentric square anchors
-        // TL
+        // Standardized White center dots (1x1 at centroid) across all 4 corners for binarization invariance.
+
+        // TL (Center dot at (2, 2))
         for (let r = 0; r < s; r++) for (let c = 0; c < s; c++) grid2D[r][c] = white;
         for (let r = 1; r < s - 1; r++) for (let c = 1; c < s - 1; c++) grid2D[r][c] = black;
         grid2D[2][2] = white;
 
-        // TR
+        // TR (Center dot at (2, N-3))
         for (let r = 0; r < s; r++) for (let c = N - s; c < N; c++) grid2D[r][c] = white;
         for (let r = 1; r < s - 1; r++) for (let c = N - s + 1; c < N - 1; c++) grid2D[r][c] = black;
-        grid2D[2][N - 3] = (this.palette.length > 4) ? 4 : white; // Red dot if 8-color
+        grid2D[2][N - 3] = white;
 
-        // BR
+        // BR (Center dot at (N-3, N-3))
         for (let r = N - s; r < N; r++) for (let c = N - s; c < N; c++) grid2D[r][c] = white;
         for (let r = N - s + 1; r < N - 1; r++) for (let c = N - s + 1; c < N - 1; c++) grid2D[r][c] = black;
-        grid2D[N - 3][N - 3] = (this.palette.length > 2) ? 2 : white; // Green dot
+        grid2D[N - 3][N - 3] = white;
 
-        // BL
+        // BL (Center dot at (N-3, 2))
         for (let r = N - s; r < N; r++) for (let c = 0; c < s; c++) grid2D[r][c] = white;
         for (let r = N - s + 1; r < N - 1; r++) for (let c = 1; c < s - 1; c++) grid2D[r][c] = black;
         grid2D[N - 3][2] = white;
@@ -166,4 +179,14 @@ function gridIndicesToBytes(grid2D, layout) {
         out[i] = b;
     }
     return out;
+}
+
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+        PALETTES,
+        JS_ANCHOR_SIZE,
+        JSColorMatrixLayout,
+        bytesToGridIndices,
+        gridIndicesToBytes
+    };
 }

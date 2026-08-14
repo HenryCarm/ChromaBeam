@@ -46,21 +46,88 @@ function initReceiver() {
     appendReceiverLog("[SYSTEM] ChromaBeam 3D Optical Scanner initialized.", "info");
 }
 
+// ===================== INLINE VISION & DECODER ENGINE FALLBACK =====================
+
+const INLINE_CANDIDATE_CONFIGS = [
+    { grid: 32, mode: 0, label: '32×32 B&W (Potato)' },
+    { grid: 48, mode: 0, label: '48×48 B&W' },
+    { grid: 64, mode: 0, label: '64×64 B&W' },
+    { grid: 32, mode: 1, label: '32×32 4-Color' },
+    { grid: 48, mode: 1, label: '48×48 4-Color' },
+    { grid: 48, mode: 2, label: '48×48 8-Color' },
+    { grid: 64, mode: 2, label: '64×64 8-Color' },
+];
+
+const INLINE_CACHED_LAYOUTS = {};
+function getInlineLayout(grid, mode) {
+    const key = `${grid}_${mode}`;
+    if (!INLINE_CACHED_LAYOUTS[key] && typeof JSColorMatrixLayout === 'function') {
+        INLINE_CACHED_LAYOUTS[key] = new JSColorMatrixLayout(grid, mode);
+    }
+    return INLINE_CACHED_LAYOUTS[key] || null;
+}
+
+let inlineDecoder = null;
+let inlineCurrentFileId = null;
+let inlineLockedConfig = null;
+
+function resetInlineDecoderSession() {
+    inlineDecoder = null;
+    inlineCurrentFileId = null;
+    inlineLockedConfig = null;
+}
+
 function setupScannerWorker() {
-    if (window.Worker) {
+    // 1. Check for inlined worker source in offline bundled HTML
+    const workerSrcElem = typeof document !== 'undefined' ? document.getElementById('scanner-worker-src') : null;
+    if (workerSrcElem && workerSrcElem.textContent && workerSrcElem.textContent.trim().length > 0 &&
+        typeof window !== 'undefined' && typeof window.Worker !== 'undefined' &&
+        typeof window.Blob !== 'undefined' && typeof window.URL !== 'undefined' &&
+        typeof window.URL.createObjectURL === 'function') {
+        try {
+            const workerCode = workerSrcElem.textContent;
+            const blob = new Blob([workerCode], { type: 'application/javascript' });
+            const blobUrl = URL.createObjectURL(blob);
+            scannerWorker = new Worker(blobUrl);
+            scannerWorker.onmessage = handleWorkerMessage;
+            scannerWorker.onerror = function(err) {
+                appendReceiverLog(`[WORKER ERROR] ${err.message || 'Worker thread failure'}`, "error");
+                console.warn("[Receiver] Worker error, falling back to inline decoding:", err);
+                try { scannerWorker.terminate(); } catch (_) {}
+                scannerWorker = null;
+                workerIsBusy = false;
+            };
+            appendReceiverLog("[SYSTEM] Multi-threaded Web Worker active (Offline Blob Engine).", "info");
+            return;
+        } catch (e) {
+            appendReceiverLog(`[SYSTEM] Blob Worker unavailable (${e.message}), attempting server worker or inline fallback.`, "warn");
+            console.warn("[Receiver] Blob Worker creation failed:", e);
+            scannerWorker = null;
+        }
+    }
+
+    // 2. Check for server-hosted scanner_worker.js
+    if (typeof window !== 'undefined' && typeof window.Worker !== 'undefined') {
         try {
             scannerWorker = new Worker('scanner_worker.js');
             scannerWorker.onmessage = handleWorkerMessage;
             scannerWorker.onerror = function(err) {
                 appendReceiverLog(`[WORKER ERROR] ${err.message || 'Worker thread failure'}`, "error");
-                console.warn("[Receiver] Worker error, fallback to inline:", err);
+                console.warn("[Receiver] Worker error, falling back to inline decoding:", err);
+                try { scannerWorker.terminate(); } catch (_) {}
                 scannerWorker = null;
+                workerIsBusy = false;
             };
             appendReceiverLog("[SYSTEM] Multi-threaded Web Worker background engine active.", "info");
+            return;
         } catch (e) {
             appendReceiverLog(`[SYSTEM] Web Worker unavailable (${e.message}), using inline fallback.`, "warn");
+            console.warn("[Receiver] Worker creation failed:", e);
             scannerWorker = null;
         }
+    } else {
+        appendReceiverLog("[SYSTEM] Web Worker not supported, using inline fallback.", "warn");
+        scannerWorker = null;
     }
 }
 
@@ -77,6 +144,7 @@ function resetReceiverSession() {
     if (scannerWorker) {
         scannerWorker.postMessage({ type: 'reset' });
     }
+    resetInlineDecoderSession();
     appendReceiverLog("[SESSION] Reception session reset. Ready for beam.", "info");
 }
 
@@ -188,9 +256,9 @@ function processReceiverFrame() {
         // Dispatch frame to Background Web Worker if idle
         if (!workerIsBusy && !receiverIsComplete) {
             const imgData = receiverCtx.getImageData(0, 0, vw, vh);
-            const buffer = imgData.data.buffer; // Transferable zero-copy
 
             if (scannerWorker) {
+                const buffer = imgData.data.buffer; // Transferable zero-copy
                 workerIsBusy = true;
                 scannerWorker.postMessage({
                     type: 'processFrame',
@@ -221,6 +289,193 @@ function applyBinarizerFilterToCanvas(w, h, threshold) {
     receiverCtx.putImageData(imgData, 0, 0);
 }
 
+// ===================== INLINE FRAME PROCESSING FALLBACK =====================
+
+function processFrameInline(imgData, vw, vh, guideRect) {
+    const startTime = performance.now();
+    const w = vw || (imgData ? imgData.width : 0);
+    const h = vh || (imgData ? imgData.height : 0);
+
+    if (receiverIsComplete) {
+        handleWorkerMessage({
+            data: {
+                type: 'frameResult',
+                locked: false,
+                caught: receiverPacketsCaught,
+                drops: receiverCRCErrors,
+                progress: 1.0,
+                progressPctFormatted: "100.0000%",
+                isComplete: true,
+                latencyMs: (performance.now() - startTime).toFixed(1)
+            }
+        });
+        return;
+    }
+
+    try {
+        // 1. Detect 4-point quadrilateral in 3D camera space
+        const detectRes = (typeof detectOpticalQuad === 'function')
+            ? detectOpticalQuad(imgData, w, h, guideRect)
+            : { quad: null, method: 'None' };
+        const quad = detectRes.quad;
+        const detectMethod = detectRes.method;
+
+        let decodedResult = null;
+        let matchedConfig = null;
+        let lastLumaMetrics = null;
+
+        if (quad && typeof sampleQuadGrid === 'function' && typeof decodeGridMultiOrientation === 'function') {
+            const configsToTest = inlineLockedConfig ? [inlineLockedConfig] : INLINE_CANDIDATE_CONFIGS;
+
+            for (const cfg of configsToTest) {
+                const layout = getInlineLayout(cfg.grid, cfg.mode);
+                if (!layout) continue;
+
+                // Primary sample pass
+                const sampleRes = sampleQuadGrid(imgData, w, h, quad, layout);
+                lastLumaMetrics = {
+                    lumaThreshold: sampleRes.lumaThreshold,
+                    minLuma: sampleRes.minLuma,
+                    maxLuma: sampleRes.maxLuma,
+                    contrast: sampleRes.contrast
+                };
+
+                let res = decodeGridMultiOrientation(sampleRes.grid2D, layout);
+
+                // Multi-threshold fallback for B&W mode (glare compensation)
+                if (!res && cfg.mode === 0 && sampleRes.contrast > 30) {
+                    const altThresholds = [sampleRes.lumaThreshold - 15, sampleRes.lumaThreshold + 15];
+                    for (const altT of altThresholds) {
+                        if (altT > 20 && altT < 240) {
+                            const altSample = sampleQuadGrid(imgData, w, h, quad, layout, altT);
+                            res = decodeGridMultiOrientation(altSample.grid2D, layout);
+                            if (res) break;
+                        }
+                    }
+                }
+
+                if (res) {
+                    decodedResult = res;
+                    matchedConfig = cfg;
+                    inlineLockedConfig = cfg;
+                    break;
+                }
+            }
+
+            if (!decodedResult && inlineLockedConfig) {
+                inlineLockedConfig = null; // Lost lock, resume sweep next frame
+            }
+        }
+
+        let fileResult = null;
+        const latencyMs = (performance.now() - startTime).toFixed(1);
+
+        if (decodedResult) {
+            const { packet, rotationDeg } = decodedResult;
+            const { header, payload } = packet;
+
+            if (!inlineDecoder || inlineCurrentFileId !== header.fileId) {
+                inlineCurrentFileId = header.fileId;
+                if (typeof LTDecoder === 'function') {
+                    inlineDecoder = new LTDecoder(header.totalBlocks, header.blockSize, header.totalBlocks * header.blockSize);
+                }
+            }
+
+            let solved = false;
+            let progressRatio = 0;
+            let solvedCount = 0;
+            let totalCount = header.totalBlocks || 0;
+
+            if (inlineDecoder) {
+                solved = inlineDecoder.addDroplet(header.seed, payload);
+                progressRatio = inlineDecoder.getProgress();
+                solvedCount = inlineDecoder.solvedBlocks ? inlineDecoder.solvedBlocks.size : 0;
+                totalCount = inlineDecoder.K;
+            }
+
+            const progressPct = (progressRatio * 100).toFixed(4) + "%";
+
+            if (solved && !receiverIsComplete && inlineDecoder) {
+                const fullData = inlineDecoder.reconstructData();
+                if (fullData) {
+                    const meta = (typeof unpackFileMetadata === 'function') ? unpackFileMetadata(fullData) : null;
+                    let filename = "chromabeam_received.bin";
+                    let filePayload = fullData;
+                    if (meta) {
+                        filename = meta.filename;
+                        filePayload = fullData.subarray(meta.metadataHeaderLen, meta.metadataHeaderLen + meta.filesize);
+                    }
+                    fileResult = {
+                        filename,
+                        filesize: filePayload.length,
+                        payloadBuffer: filePayload.buffer
+                    };
+                }
+            }
+
+            handleWorkerMessage({
+                data: {
+                    type: 'frameResult',
+                    locked: true,
+                    quad,
+                    detectMethod,
+                    caught: receiverPacketsCaught + 1,
+                    drops: receiverCRCErrors,
+                    progress: progressRatio,
+                    progressPctFormatted: progressPct,
+                    solvedBlocks: solvedCount,
+                    totalBlocks: totalCount,
+                    configLabel: `${matchedConfig.label} (${rotationDeg}° rot)`,
+                    rotationDeg,
+                    lumaMetrics: lastLumaMetrics,
+                    latencyMs,
+                    isComplete: (solved && !receiverIsComplete) ? true : receiverIsComplete,
+                    fileResult,
+                    logMsg: `[DECODE:INLINE] Droplet seed #${header.seed} (K=${totalCount}) solved: ${solvedCount}/${totalCount} (${progressPct})`
+                }
+            });
+
+        } else {
+            const progressRatio = inlineDecoder ? inlineDecoder.getProgress() : 0;
+            const progressPct = (progressRatio * 100).toFixed(4) + "%";
+
+            handleWorkerMessage({
+                data: {
+                    type: 'frameResult',
+                    locked: false,
+                    quad,
+                    detectMethod,
+                    caught: receiverPacketsCaught,
+                    drops: quad ? (receiverCRCErrors + 1) : receiverCRCErrors,
+                    progress: progressRatio,
+                    progressPctFormatted: progressPct,
+                    solvedBlocks: (inlineDecoder && inlineDecoder.solvedBlocks) ? inlineDecoder.solvedBlocks.size : 0,
+                    totalBlocks: inlineDecoder ? inlineDecoder.K : 0,
+                    lumaMetrics: lastLumaMetrics,
+                    latencyMs,
+                    isComplete: receiverIsComplete,
+                    fileResult: null,
+                    logMsg: null
+                }
+            });
+        }
+    } catch (err) {
+        console.error("[Receiver] Inline processing exception:", err);
+        handleWorkerMessage({
+            data: {
+                type: 'frameResult',
+                locked: false,
+                caught: receiverPacketsCaught,
+                drops: receiverCRCErrors + 1,
+                progress: 0,
+                progressPctFormatted: "0.0000%",
+                error: err.message,
+                logMsg: `[ERROR:INLINE] ${err.message}`
+            }
+        });
+    }
+}
+
 // ===================== WORKER MESSAGE HANDLER =====================
 
 function handleWorkerMessage(e) {
@@ -246,24 +501,30 @@ function handleWorkerMessage(e) {
 
     // Update Telemetry HUD
     if (res.detectMethod) {
-        document.getElementById('receiverDetectorVal').textContent = `${res.detectMethod} ${res.locked ? '★' : '○'}`;
+        const detElem = document.getElementById('receiverDetectorVal');
+        if (detElem) detElem.textContent = `${res.detectMethod} ${res.locked ? '★' : '○'}`;
     }
     if (res.lumaMetrics) {
         const lm = res.lumaMetrics;
-        document.getElementById('receiverLumaVal').textContent = `Thresh: ${lm.lumaThreshold} (Contr: ${lm.contrast})`;
+        const lumaElem = document.getElementById('receiverLumaVal');
+        if (lumaElem) lumaElem.textContent = `Thresh: ${lm.lumaThreshold} (Contr: ${lm.contrast})`;
     }
 
     const badge = document.getElementById('receiverStatusBadge');
-    if (res.locked) {
-        badge.textContent = `● LOCKED: ${receiverLastConfigLabel}`;
-        badge.className = "badge-locked";
-    } else {
-        badge.textContent = "● SCANNING (360° 3D Active)";
-        badge.className = "badge-scanning";
+    if (badge) {
+        if (res.locked) {
+            badge.textContent = `● LOCKED: ${receiverLastConfigLabel}`;
+            badge.className = "badge-locked";
+        } else {
+            badge.textContent = "● SCANNING (360° 3D Active)";
+            badge.className = "badge-scanning";
+        }
     }
 
-    document.getElementById('receiverDropletVal').textContent =
-        `Caught: ${receiverPacketsCaught} (Drops: ${receiverCRCErrors})`;
+    const dropElem = document.getElementById('receiverDropletVal');
+    if (dropElem) {
+        dropElem.textContent = `Caught: ${receiverPacketsCaught} (Drops: ${receiverCRCErrors})`;
+    }
 
     // Append log line if present
     if (res.logMsg) {
@@ -278,22 +539,33 @@ function handleWorkerMessage(e) {
 
 function downloadReceivedFile(fileResult) {
     updateReceiverProgress(1.0, "100.0000%", fileResult.filesize, fileResult.filesize);
-    document.getElementById('receiverStatusBadge').textContent = "★ TRANSFER COMPLETE!";
-    document.getElementById('receiverStatusBadge').className = "badge-complete";
+    const badge = document.getElementById('receiverStatusBadge');
+    if (badge) {
+        badge.textContent = "★ TRANSFER COMPLETE!";
+        badge.className = "badge-complete";
+    }
 
     const { filename, payloadBuffer } = fileResult;
-    const blob = new Blob([payloadBuffer], { type: 'application/octet-stream' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    if (typeof Blob !== 'undefined' && typeof URL !== 'undefined' && typeof document !== 'undefined') {
+        try {
+            const blob = new Blob([payloadBuffer], { type: 'application/octet-stream' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            if (document.body) document.body.appendChild(a);
+            a.click();
+            if (document.body) document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        } catch (e) {
+            console.warn("[Receiver] Download file trigger error:", e);
+        }
+    }
 
     appendReceiverLog(`[SUCCESS] Assembly complete! Downloaded ${filename} (${(payloadBuffer.byteLength / 1024).toFixed(1)} KB)`, "decode");
-    alert(`🎉 Success! Received and assembled file: ${filename} (${(payloadBuffer.byteLength / 1024).toFixed(1)} KB)`);
+    if (typeof alert === 'function') {
+        alert(`🎉 Success! Received and assembled file: ${filename} (${(payloadBuffer.byteLength / 1024).toFixed(1)} KB)`);
+    }
 }
 
 // ===================== LOGGING CONSOLE =====================
@@ -409,3 +681,16 @@ function drawViewfinderOverlay(guideRect, quad, isLocked, configLabel, vw, vh) {
     ctx.textAlign = 'center';
     ctx.fillText(isLocked ? '● OPTICAL LOCK ENGAGED (3D PERSPECTIVE ACTIVE)' : 'Point camera at flashing matrix (Any angle / 360° rotation)', x + w / 2, y - 10);
 }
+
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+        setupScannerWorker,
+        processFrameInline,
+        resetReceiverSession,
+        resetInlineDecoderSession,
+        handleWorkerMessage,
+        INLINE_CANDIDATE_CONFIGS,
+        getInlineLayout
+    };
+}
+
