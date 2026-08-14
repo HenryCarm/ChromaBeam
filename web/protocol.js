@@ -102,3 +102,15 @@ function unpackFileMetadata(uint8Array) {
     const metadataHeaderLen = offset + 1 + mimeLen;
     return { filename, filesize, mimeType, metadataHeaderLen };
 }
+
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+        MAGIC_INT,
+        HEADER_SIZE,
+        computeCRC32,
+        packPacket,
+        unpackPacket,
+        packFileMetadata,
+        unpackFileMetadata
+    };
+}

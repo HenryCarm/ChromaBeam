@@ -109,7 +109,7 @@ function setupScannerWorker() {
     // 2. Check for server-hosted scanner_worker.js
     if (typeof window !== 'undefined' && typeof window.Worker !== 'undefined') {
         try {
-            scannerWorker = new Worker('scanner_worker.js?v=3');
+            scannerWorker = new Worker('scanner_worker.js?v=4');
             scannerWorker.onmessage = handleWorkerMessage;
             scannerWorker.onerror = function(err) {
                 appendReceiverLog(`[WORKER ERROR] ${err.message || 'Worker thread failure'}`, "error");
