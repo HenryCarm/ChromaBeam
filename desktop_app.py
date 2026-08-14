@@ -183,8 +183,16 @@ class CameraWorkerThread(QThread):
                             filesize = len(data)
                             if meta:
                                 filename, filesize, _ = meta
-                                data = data[len(data) - filesize:]
+                                filename = filename.strip() if filename else "received_file.bin"
+                                if not filename:
+                                    filename = "received_file.bin"
+                                data = data[:filesize] if filesize else data
+                            else:
+                                filename = filename.strip() if filename else "received_file.bin"
+                                if not filename:
+                                    filename = "received_file.bin"
 
+                            os.makedirs(self.output_dir, exist_ok=True)
                             out_path = os.path.join(self.output_dir, filename)
                             with open(out_path, "wb") as f:
                                 f.write(data)

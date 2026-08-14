@@ -185,8 +185,16 @@ class ChromaBeamReceiver:
             meta = unpack_file_metadata(data)
             if meta:
                 self.filename, self.filesize, _ = meta
-                data = data[len(data) - self.filesize:]  # Extract actual payload
+                self.filename = self.filename.strip() if self.filename else "received_file.bin"
+                if not self.filename:
+                    self.filename = "received_file.bin"
+                data = data[:self.filesize] if self.filesize else data
+            else:
+                self.filename = self.filename.strip() if self.filename else "received_file.bin"
+                if not self.filename:
+                    self.filename = "received_file.bin"
 
+            os.makedirs(self.output_dir, exist_ok=True)
             out_path = os.path.join(self.output_dir, self.filename)
             with open(out_path, "wb") as f:
                 f.write(data)

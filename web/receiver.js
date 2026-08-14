@@ -237,11 +237,6 @@ function processReceiverFrame() {
         // Draw camera frame directly to canvas
         receiverCtx.drawImage(receiverVideo, 0, 0, vw, vh);
 
-        // Optional: Render binarized vision mask if toggled
-        if (showBinarizerView && receiverLastLumaMetrics) {
-            applyBinarizerFilterToCanvas(vw, vh, receiverLastLumaMetrics.lumaThreshold || 128);
-        }
-
         // Guide bounds (center 85%)
         const guideSide = Math.min(vw, vh) * 0.85;
         const gx = Math.floor((vw - guideSide) / 2);
@@ -250,10 +245,9 @@ function processReceiverFrame() {
         const gh = Math.floor(guideSide);
         const guideRect = { x: gx, y: gy, w: gw, h: gh };
 
-        // Draw augmented reality viewfinder guide & 3D quad reticles
-        drawViewfinderOverlay(guideRect, receiverLastQuad, receiverIsLocked, receiverLastConfigLabel, vw, vh);
-
-        // Dispatch frame to Background Web Worker if idle
+        // *** CRITICAL: Capture PRISTINE frame data BEFORE drawing any UI overlays ***
+        // The viewfinder mask, brackets, and binarizer filter MUST NOT contaminate
+        // the pixel data sent to the scanner worker for decoding!
         if (!workerIsBusy && !receiverIsComplete) {
             const imgData = receiverCtx.getImageData(0, 0, vw, vh);
 
@@ -271,6 +265,16 @@ function processReceiverFrame() {
                 processFrameInline(imgData, vw, vh, guideRect);
             }
         }
+
+        // NOW draw visual overlays on top (these are for display only, not for decoding)
+
+        // Optional: Render binarized vision mask if toggled
+        if (showBinarizerView && receiverLastLumaMetrics) {
+            applyBinarizerFilterToCanvas(vw, vh, receiverLastLumaMetrics.lumaThreshold || 128);
+        }
+
+        // Draw augmented reality viewfinder guide & 3D quad reticles
+        drawViewfinderOverlay(guideRect, receiverLastQuad, receiverIsLocked, receiverLastConfigLabel, vw, vh);
     }
 
     requestAnimationFrame(processReceiverFrame);

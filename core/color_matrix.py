@@ -15,7 +15,8 @@ from typing import Tuple, List, Optional
 PALETTE_1BIT = np.array([
     [0,   0,   0],    # 0: Black
     [255, 255, 255]   # 1: White
-], dtype=np.uint8)
+], dtype=np.int32)
+PALETTE_1BIT_BW = PALETTE_1BIT
 
 # Mode 1: 2-bit 4-Color (Black, Red, Green, White)
 PALETTE_2BIT = np.array([
@@ -23,7 +24,8 @@ PALETTE_2BIT = np.array([
     [255, 50,  50],   # 01: Red
     [50,  255, 50],   # 10: Green
     [255, 255, 255]   # 11: White
-], dtype=np.uint8)
+], dtype=np.int32)
+PALETTE_2BIT_4COLOR = PALETTE_2BIT
 
 # Mode 2: 3-bit 8-Color RGB (JAB)
 PALETTE_3BIT = np.array([
@@ -35,7 +37,8 @@ PALETTE_3BIT = np.array([
     [255, 0,   255],  # 101: Magenta
     [255, 255, 0],    # 110: Yellow
     [255, 255, 255]   # 111: White
-], dtype=np.uint8)
+], dtype=np.int32)
+PALETTE_3BIT_8COLOR = PALETTE_3BIT
 
 ANCHOR_SIZE = 5
 
@@ -197,7 +200,9 @@ def color_grid_to_bytes(grid: np.ndarray, layout: ColorMatrixLayout, classifier_
         indices = classifier_fn(rgb_values, layout.color_mode)
     else:
         # Default nearest palette index classifier
-        dists = np.sum((rgb_values[:, np.newaxis, :] - layout.palette[np.newaxis, :, :]) ** 2, axis=2)
+        rgb_int = rgb_values.astype(np.int32)
+        palette_int = layout.palette.astype(np.int32)
+        dists = np.sum((rgb_int[:, np.newaxis, :] - palette_int[np.newaxis, :, :]) ** 2, axis=2)
         indices = np.argmin(dists, axis=1)
 
     if bpc == 1:
