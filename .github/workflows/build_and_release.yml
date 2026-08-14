@@ -1,0 +1,204 @@
+name: ChromaBeam Multi-Platform Build & Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  # =================================================================
+  # 1. LINUX MINT / UBUNTU BUILD (Nuitka Standalone & Onefile)
+  # =================================================================
+  build-linux:
+    name: Build Linux Mint / Ubuntu Binaries
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgl1-mesa-glx libglib2.0-0 ccache
+
+      - name: Install Python Dependencies
+        run: |
+          pip install --upgrade pip wheel
+          pip install -r requirements.txt
+
+      - name: Build Nuitka Standalone (Fast Startup Folder)
+        run: |
+          python -m nuitka --standalone \
+            --enable-plugin=pyqt6 \
+            --include-package=core \
+            --include-package=desktop_receiver \
+            --include-package=desktop_sender \
+            --include-data-file=chromabeam_offline.html=chromabeam_offline.html \
+            --output-dir=dist_linux_standalone \
+            desktop_app.py
+          tar -czvf ChromaBeam-Linux-x86_64-Standalone.tar.gz -C dist_linux_standalone desktop_app.dist
+
+      - name: Build Nuitka Onefile (Single Portable Executable)
+        run: |
+          python -m nuitka --onefile \
+            --enable-plugin=pyqt6 \
+            --include-package=core \
+            --include-package=desktop_receiver \
+            --include-package=desktop_sender \
+            --include-data-file=chromabeam_offline.html=chromabeam_offline.html \
+            --output-filename=ChromaBeam-Linux-x86_64 \
+            desktop_app.py
+
+      - name: Upload Linux Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-binaries
+          path: |
+            ChromaBeam-Linux-x86_64
+            ChromaBeam-Linux-x86_64-Standalone.tar.gz
+
+  # =================================================================
+  # 2. WINDOWS BUILD (Nuitka Standalone & Onefile .exe)
+  # =================================================================
+  build-windows:
+    name: Build Windows x64 Executables
+    runs-on: windows-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install Python Dependencies
+        run: |
+          python -m pip install --upgrade pip wheel
+          pip install -r requirements.txt
+
+      - name: Build Nuitka Standalone (Windows Folder)
+        run: |
+          python -m nuitka --standalone `
+            --enable-plugin=pyqt6 `
+            --include-package=core `
+            --include-package=desktop_receiver `
+            --include-package=desktop_sender `
+            --include-data-file=chromabeam_offline.html=chromabeam_offline.html `
+            --output-dir=dist_win_standalone `
+            desktop_app.py
+          Compress-Archive -Path dist_win_standalone\desktop_app.dist\* -DestinationPath ChromaBeam-Windows-x64-Standalone.zip
+
+      - name: Build Nuitka Onefile (Portable .exe)
+        run: |
+          python -m nuitka --onefile `
+            --enable-plugin=pyqt6 `
+            --include-package=core `
+            --include-package=desktop_receiver `
+            --include-package=desktop_sender `
+            --include-data-file=chromabeam_offline.html=chromabeam_offline.html `
+            --output-filename=ChromaBeam-Windows-x64.exe `
+            desktop_app.py
+
+      - name: Upload Windows Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-binaries
+          path: |
+            ChromaBeam-Windows-x64.exe
+            ChromaBeam-Windows-x64-Standalone.zip
+
+  # =================================================================
+  # 3. ANDROID CLOUD BUILD (Buildozer CI/CD)
+  # =================================================================
+  build-android:
+    name: Build Android APK (Cloud Build)
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install Buildozer & Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git zip unzip openjdk-17-jdk autoconf libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 cmake libffi-dev libssl-dev
+          pip install --upgrade buildozer Cython==0.29.36 virtualenv
+
+      - name: Build Android APK with Buildozer
+        run: |
+          buildozer android debug
+
+      - name: Rename and Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: bin/*.apk
+
+  # =================================================================
+  # 4. GITHUB RELEASE PUBLISHER
+  # =================================================================
+  release:
+    name: Publish Multi-Platform Release
+    needs: [build-linux, build-windows, build-android]
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Download Linux Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-binaries
+          path: release_assets/
+
+      - name: Download Windows Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-binaries
+          path: release_assets/
+
+      - name: Download Android Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: android-apk
+          path: release_assets/
+
+      - name: Copy Offline HTML App
+        run: |
+          cp chromabeam_offline.html release_assets/ChromaBeam-Offline-Universal.html
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release_assets/*
+          name: "ChromaBeam ${{ github.ref_name }}"
+          body: |
+            ## ⚡ ChromaBeam Multi-Platform Release
+            High-Speed Optical File Transfer Protocol (350–550+ KB/s) via 3-bit RGB Fountain Codes.
+
+            ### 📦 Included Release Packages:
+            - 🐧 **Linux Mint / Ubuntu**: `ChromaBeam-Linux-x86_64` (Onefile) & `ChromaBeam-Linux-x86_64-Standalone.tar.gz`
+            - 🪟 **Windows x64**: `ChromaBeam-Windows-x64.exe` (Onefile) & `ChromaBeam-Windows-x64-Standalone.zip`
+            - 📱 **Android Phone**: `ChromaBeam-1.0.0-debug.apk`
+            - 🌐 **100% Offline Universal Web App**: `ChromaBeam-Offline-Universal.html` (Open on ANY phone or PC in airplane mode!)
+          draft: false
+          prerelease: false

@@ -1,0 +1,32 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments (Strictly forbidden locally, but keep git clean)
+.venv/
+venv/
+ENV/
+
+# Build & Packaging directories (Nuitka / PyInstaller / Buildozer)
+*.build/
+*.dist/
+*.onefile-build/
+.buildozer/
+bin/
+*.apk
+*.aab
+*.exe
+*.AppImage
+
+# Logs and scratch binaries
+*.log
+*.bin
+final_*.png
+verification.png
+chromabeam_desktop_sender.png
+chromabeam_unified_desktop.png
+
+# Downloads
+/tmp/chromabeam_downloads/
+~/Downloads/ChromaBeam_Received/
