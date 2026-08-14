@@ -46,9 +46,10 @@ def bundle():
     # Replace <link rel="stylesheet" href="style.css"> with <style>
     html = html.replace('<link rel="stylesheet" href="style.css">', f"<style>\n{css}\n</style>")
 
+    import re
     # Replace <script src="..."></script> tags with inline script
     for js_file in main_js_files:
-        html = html.replace(f'<script src="{js_file}"></script>', "")
+        html = re.sub(rf'<script src="{re.escape(js_file)}(\?[^"]*)?"></script>', "", html)
 
     # Embed worker source as text/plain script tag, followed by main JS
     embedded_payload = (

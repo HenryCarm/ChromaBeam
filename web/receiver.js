@@ -33,7 +33,7 @@ let receiverIsLocked = false;
 let receiverLastLumaMetrics = null;
 let receiverWorkerLatency = 0;
 
-const MAX_LOG_ENTRIES = 120;
+const MAX_LOG_ENTRIES = 2000;
 let receiverLogLines = [];
 
 function initReceiver() {
@@ -109,7 +109,7 @@ function setupScannerWorker() {
     // 2. Check for server-hosted scanner_worker.js
     if (typeof window !== 'undefined' && typeof window.Worker !== 'undefined') {
         try {
-            scannerWorker = new Worker('scanner_worker.js');
+            scannerWorker = new Worker('scanner_worker.js?v=3');
             scannerWorker.onmessage = handleWorkerMessage;
             scannerWorker.onerror = function(err) {
                 appendReceiverLog(`[WORKER ERROR] ${err.message || 'Worker thread failure'}`, "error");
@@ -530,9 +530,14 @@ function handleWorkerMessage(e) {
         dropElem.textContent = `Caught: ${receiverPacketsCaught} (Drops: ${receiverCRCErrors})`;
     }
 
-    // Append log line if present
+    // Append log lines if present (worker may send multi-line logs)
     if (res.logMsg) {
-        appendReceiverLog(res.logMsg, res.locked ? "decode" : "info");
+        const lines = res.logMsg.split('\n');
+        for (const line of lines) {
+            if (line.trim().length > 0) {
+                appendReceiverLog(line, res.locked ? "decode" : "info");
+            }
+        }
     }
 
     if (res.isComplete && res.fileResult && !receiverIsComplete) {
