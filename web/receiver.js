@@ -27,6 +27,21 @@ function initReceiver() {
     }
 }
 
+async function getCameraStream(constraints) {
+    // 1. Standard navigator.mediaDevices.getUserMedia
+    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+        return await navigator.mediaDevices.getUserMedia(constraints);
+    }
+    // 2. Legacy navigator.getUserMedia fallbacks
+    const legacyGetUserMedia = navigator.getUserMedia || navigator.webkitGetUserMedia || navigator.mozGetUserMedia || navigator.msGetUserMedia;
+    if (legacyGetUserMedia) {
+        return new Promise((resolve, reject) => {
+            legacyGetUserMedia.call(navigator, constraints, resolve, reject);
+        });
+    }
+    throw new Error("INSECURE_CONTEXT_OR_UNSUPPORTED");
+}
+
 async function startReceiverCamera() {
     try {
         const constraints = {
@@ -39,7 +54,7 @@ async function startReceiverCamera() {
             audio: false
         };
 
-        receiverStream = await navigator.mediaDevices.getUserMedia(constraints);
+        receiverStream = await getCameraStream(constraints);
         receiverVideo.srcObject = receiverStream;
         await receiverVideo.play();
 
@@ -56,7 +71,16 @@ async function startReceiverCamera() {
 
         requestAnimationFrame(processReceiverFrame);
     } catch (err) {
-        alert("Camera Access Error: " + err.message);
+        if (err.message === "INSECURE_CONTEXT_OR_UNSUPPORTED" || err.name === "TypeError") {
+            const httpsUrl = `https://${location.hostname}:8443/`;
+            const msg = `⚠️ Camera Blocked by Browser Security Policy!\n\nModern mobile browsers (Chrome / Samsung Internet / Safari) require HTTPS for camera access.\n\n👉 Please open the HTTPS link instead:\n${httpsUrl}\n\n(Tap 'Advanced' -> 'Proceed' if you see a self-signed cert warning).`;
+            alert(msg);
+            if (confirm("Redirect to HTTPS now?")) {
+                window.location.href = httpsUrl;
+            }
+        } else {
+            alert("Camera Access Error: " + err.message + " (" + (err.name || "Unknown") + ")");
+        }
         console.error("Camera error:", err);
     }
 }
