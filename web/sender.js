@@ -128,7 +128,7 @@ function setSenderPayload(uint8Bytes, filename) {
     fullPayload.set(senderFileBytes, metaBytes.length);
 
     let blockSize;
-    if (senderColorMode === 0) {
+    if (senderColorMode === 0 && senderGridSize === 64) {
         if (senderFileBytes.length <= 2048) blockSize = 64;
         else if (senderFileBytes.length <= 64 * 1024) blockSize = 200;
         else blockSize = 350;
@@ -143,13 +143,21 @@ function setSenderPayload(uint8Bytes, filename) {
     if (fLbl) fLbl.textContent = `File: ${senderFilename}`;
     const sLbl = document.getElementById('senderSizeLabel');
     if (sLbl) sLbl.textContent = `Size: ${(senderFileBytes.length / 1024).toFixed(1)} KB | Blocks K: ${senderEncoder.K} (Block: ${blockSize} B)`;
+
+    if (!senderIsStreaming) {
+        renderIdleSenderFrame();
+    }
 }
 
 function renderIdleSenderFrame() {
     if (!senderCtx) return;
-    const grid2D = Array.from({ length: senderLayout.gridSize }, () => new Uint8Array(senderLayout.gridSize));
-    senderLayout.renderAnchors(grid2D);
-    drawGridToCanvas(grid2D);
+    if (senderColorMode === 0 && senderGridSize === 64) {
+        drawQRCodeToCanvas(new Uint8Array([0x43, 0x68, 0x72, 0x6F, 0x6D, 0x61]));
+    } else {
+        const grid2D = Array.from({ length: senderLayout.gridSize }, () => new Uint8Array(senderLayout.gridSize));
+        senderLayout.renderAnchors(grid2D);
+        drawGridToCanvas(grid2D);
+    }
 }
 
 function uint8ArrayToBase64(uint8Array) {
@@ -256,7 +264,8 @@ function animateSenderStream(currentTime) {
             const { degree, indices, payload } = senderEncoder.generateDroplet(seed);
             const packet = packPacket(senderFileId, senderEncoder.K, senderEncoder.blockSize, seed, payload);
 
-            if (senderColorMode === 0) {
+            // Use Standard QR only for default 64x64 B&W mode; for all custom densities (32, 48, 128, 256, 512, 1024, 2048) or color modes, use the actual Optical Matrix grid!
+            if (senderColorMode === 0 && senderGridSize === 64) {
                 drawQRCodeToCanvas(packet);
             } else {
                 const grid2D = bytesToGridIndices(packet, senderLayout);
@@ -268,12 +277,16 @@ function animateSenderStream(currentTime) {
             const rate = kbSent / elapsed;
             const cycles = Math.floor(senderTotalSent / senderEncoder.K);
 
-            document.getElementById('senderRateVal').textContent = `${rate.toFixed(1)} KB/s`;
-            document.getElementById('senderDropletVal').textContent = `Droplets: ${senderTotalSent} (Seed #${seed})`;
-            document.getElementById('senderCycleVal').textContent = `Cycles: ${cycles}x | Degree: ${degree}`;
+            const rateElem = document.getElementById('senderRateVal');
+            if (rateElem) rateElem.textContent = `${rate.toFixed(1)} KB/s`;
+            const dropElem = document.getElementById('senderDropletVal');
+            if (dropElem) dropElem.textContent = `Droplets: ${senderTotalSent} (Seed #${seed})`;
+            const cycleElem = document.getElementById('senderCycleVal');
+            if (cycleElem) cycleElem.textContent = `Cycles: ${cycles}x | Degree: ${degree}`;
         }
     }
 
+    senderAnimationHandle = requestAnimationFrame(animateSenderStream);
 }
 
 function setupDragAndDrop() {

@@ -216,22 +216,39 @@ self.onmessage = function(e) {
             }
 
             // =========================================================================
-            // PASS 2: Custom Multi-Color Optical Matrix Detection (3D Homography)
+            // PASS 2: Custom Multi-Color Optical Matrix Detection (Smart Snap + 3D Homography)
             // =========================================================================
             if (!decodedResult) {
+                const quadCandidates = [];
+
+                // Candidate A: 3-Anchor 3D Homography (if finders detected)
                 const detectRes = detectOpticalQuad(imgData, width, height, guideRect);
-                quad = detectRes.quad;
-                detectMethod = detectRes.method;
+                if (detectRes && detectRes.quad && detectRes.method !== 'Viewfinder ROI') {
+                    quadCandidates.push({ quad: detectRes.quad, method: detectRes.method });
+                }
 
-                if (quad) {
-                    const configsToTest = workerLockedConfig ? [workerLockedConfig] : CANDIDATE_CONFIGS;
+                // Candidate B: Smart Snap Viewfinder ROI (Instant 100% lock when user aligns matrix inside guide box)
+                if (guideRect && guideRect.w > 40 && guideRect.h > 40) {
+                    const snapQuad = [
+                        { x: guideRect.x, y: guideRect.y },
+                        { x: guideRect.x + guideRect.w, y: guideRect.y },
+                        { x: guideRect.x + guideRect.w, y: guideRect.y + guideRect.h },
+                        { x: guideRect.x, y: guideRect.y + guideRect.h }
+                    ];
+                    snapQuad.isAnchorCenters = false;
+                    quadCandidates.push({ quad: snapQuad, method: 'Viewfinder Snap ROI' });
+                }
 
+                const configsToTest = workerLockedConfig ? [workerLockedConfig] : CANDIDATE_CONFIGS;
+
+                for (const cand of quadCandidates) {
+                    const testQuad = cand.quad;
                     for (const cfg of configsToTest) {
                         const layoutKey = `${cfg.grid}_${cfg.mode}`;
                         const layout = CACHED_LAYOUTS[layoutKey];
                         if (!layout) continue;
 
-                        const sampleRes = sampleQuadGrid(imgData, width, height, quad, layout);
+                        const sampleRes = sampleQuadGrid(imgData, width, height, testQuad, layout);
                         lastLumaMetrics = {
                             lumaThreshold: sampleRes.lumaThreshold,
                             minLuma: sampleRes.minLuma,
@@ -242,18 +259,18 @@ self.onmessage = function(e) {
                         let res = decodeGridMultiOrientation(sampleRes.grid2D, layout);
                         if (res) {
                             decodedResult = res;
+                            quad = testQuad;
+                            detectMethod = cand.method;
                             matchedConfigLabel = `${cfg.label} (${res.rotationDeg}° rot)`;
                             workerLockedConfig = cfg;
                             workerLastLockedQuad = quad;
                             break;
                         }
                     }
+                    if (decodedResult) break;
+                }
 
-                    if (!decodedResult) {
-                        workerLockedConfig = null;
-                        workerLastLockedQuad = null;
-                    }
-                } else {
+                if (!decodedResult) {
                     workerLockedConfig = null;
                     workerLastLockedQuad = null;
                 }

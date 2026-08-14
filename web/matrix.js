@@ -17,7 +17,10 @@ class JSColorMatrixLayout {
     constructor(gridSize = 48, colorMode = 2) {
         this.gridSize = gridSize;
         this.colorMode = colorMode;
-        this.anchorSize = JS_ANCHOR_SIZE;
+        // Always scale anchor size as an integer multiple of 7 modules
+        const mod = Math.max(1, Math.floor(gridSize / 56));
+        this.moduleScale = mod;
+        this.anchorSize = 7 * mod;
         this.palette = PALETTES[colorMode] || PALETTES[2];
         this.bitsPerCell = (colorMode === 0) ? 1 : (colorMode === 1 ? 2 : 3);
 
@@ -64,7 +67,8 @@ class JSColorMatrixLayout {
 
     get anchorCenters() {
         const N = this.gridSize;
-        const c = 3.5 / N;
+        const s = this.anchorSize;
+        const c = (s / 2) / N;
         return [
             { x: c, y: c },              // Top-Left
             { x: 1 - c, y: c },          // Top-Right
@@ -75,26 +79,26 @@ class JSColorMatrixLayout {
 
     renderAnchors(grid2D) {
         const s = this.anchorSize;
+        const m = this.moduleScale;
         const N = this.gridSize;
         const white = this.palette.length - 1;
         const black = 0;
 
-        // 1:1:3:1:1 Standard QR Finder Patterns in 3 corners (TL, TR, BL)
-
+        // 1:1:3:1:1 Standard QR Finder Patterns in 3 corners (TL, TR, BL) with module scaling
         // TL
         for (let r = 0; r < s; r++) for (let c = 0; c < s; c++) grid2D[r][c] = black;
-        for (let r = 1; r < s - 1; r++) for (let c = 1; c < s - 1; c++) grid2D[r][c] = white;
-        for (let r = 2; r < s - 2; r++) for (let c = 2; c < s - 2; c++) grid2D[r][c] = black;
+        for (let r = m; r < s - m; r++) for (let c = m; c < s - m; c++) grid2D[r][c] = white;
+        for (let r = 2 * m; r < s - 2 * m; r++) for (let c = 2 * m; c < s - 2 * m; c++) grid2D[r][c] = black;
 
         // TR
         for (let r = 0; r < s; r++) for (let c = N - s; c < N; c++) grid2D[r][c] = black;
-        for (let r = 1; r < s - 1; r++) for (let c = N - s + 1; c < N - 1; c++) grid2D[r][c] = white;
-        for (let r = 2; r < s - 2; r++) for (let c = N - s + 2; c < N - 2; c++) grid2D[r][c] = black;
+        for (let r = m; r < s - m; r++) for (let c = N - s + m; c < N - m; c++) grid2D[r][c] = white;
+        for (let r = 2 * m; r < s - 2 * m; r++) for (let c = N - s + 2 * m; c < N - 2 * m; c++) grid2D[r][c] = black;
 
         // BL
         for (let r = N - s; r < N; r++) for (let c = 0; c < s; c++) grid2D[r][c] = black;
-        for (let r = N - s + 1; r < N - 1; r++) for (let c = 1; c < s - 1; c++) grid2D[r][c] = white;
-        for (let r = N - s + 2; r < N - 2; r++) for (let c = 2; c < s - 2; c++) grid2D[r][c] = black;
+        for (let r = N - s + m; r < N - m; r++) for (let c = m; c < s - m; c++) grid2D[r][c] = white;
+        for (let r = N - s + 2 * m; r < N - 2 * m; r++) for (let c = 2 * m; c < s - 2 * m; c++) grid2D[r][c] = black;
 
         // Calibration swatches
         let calIdxs = (this.colorMode === 2) ? [0, 4, 2, 1, 7] : ((this.colorMode === 1) ? [0, 1, 2, 3] : [0, 1, 0, 1]);
