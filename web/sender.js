@@ -1,8 +1,10 @@
 /**
- * ChromaBeam Web Sender Engine
+ * ChromaBeam Web Sender Engine with Grandma Presets & Multi-Mode Support
  */
 
-let senderLayout = new JSColorMatrixLayout(48);
+let senderGridSize = 32;
+let senderColorMode = 0; // Default to Potato Mode (0: B&W) for instant bulletproof compatibility!
+let senderLayout = new JSColorMatrixLayout(senderGridSize, senderColorMode);
 let senderEncoder = null;
 let senderFileBytes = null;
 let senderFilename = "demo_sample.bin";
@@ -11,7 +13,7 @@ let senderDropletSeed = 0;
 let senderTotalSent = 0;
 let senderStartTime = 0;
 let senderIsStreaming = false;
-let senderTargetFPS = 45;
+let senderTargetFPS = 15;
 let senderAnimationHandle = null;
 let senderLastFrameTime = 0;
 
@@ -21,15 +23,65 @@ const senderCtx = senderCanvas ? senderCanvas.getContext('2d', { alpha: false })
 function initSender() {
     setupDragAndDrop();
     loadDemoSenderPayload();
+    applyPreset('potato'); // Start with Potato Mode for 100% immediate out-of-the-box reliability!
     renderIdleSenderFrame();
 }
 
+function applyPreset(presetName) {
+    document.querySelectorAll('.preset-card').forEach(c => c.classList.remove('active'));
+    const card = document.getElementById(`preset_${presetName}`);
+    if (card) card.classList.add('active');
+
+    if (presetName === 'potato') {
+        // Potato Camera: 1-bit Monochrome B&W, 32x32, 15 FPS
+        senderColorMode = 0;
+        senderGridSize = 32;
+        senderTargetFPS = 15;
+    } else if (presetName === 'balanced') {
+        // Balanced: 2-bit 4-Color, 48x48, 25 FPS
+        senderColorMode = 1;
+        senderGridSize = 48;
+        senderTargetFPS = 25;
+    } else if (presetName === 'turbo') {
+        // Turbo Speed: 3-bit 8-Color, 64x64, 45 FPS
+        senderColorMode = 2;
+        senderGridSize = 64;
+        senderTargetFPS = 45;
+    }
+
+    // Sync Pro Mode controls
+    const gridSel = document.getElementById('senderGridSelect');
+    if (gridSel) gridSel.value = senderGridSize;
+    const modeSel = document.getElementById('senderModeSelect');
+    if (modeSel) modeSel.value = senderColorMode;
+    const fpsRng = document.getElementById('senderFpsRange');
+    if (fpsRng) {
+        fpsRng.value = senderTargetFPS;
+        document.getElementById('senderFpsLabel').textContent = `Frame Rate: ${senderTargetFPS} FPS`;
+    }
+
+    senderLayout = new JSColorMatrixLayout(senderGridSize, senderColorMode);
+    if (senderFileBytes) {
+        setSenderPayload(senderFileBytes, senderFilename);
+    } else {
+        renderIdleSenderFrame();
+    }
+}
+
+function toggleProMode() {
+    const proSection = document.getElementById('senderProSection');
+    if (proSection) {
+        const isHidden = proSection.style.display === 'none';
+        proSection.style.display = isHidden ? 'block' : 'none';
+        document.getElementById('proToggleBtn').textContent = isHidden ? "▲ Hide Advanced Settings" : "⚙️ Advanced Settings (Pro)";
+    }
+}
+
 function loadDemoSenderPayload() {
-    // Generate synthetic 128KB payload
-    const demoSize = 128 * 1024;
+    const demoSize = 64 * 1024;
     const buf = new Uint8Array(demoSize);
     for (let i = 0; i < demoSize; i++) buf[i] = (i * 37) & 0xFF;
-    setSenderPayload(buf, "chromabeam_sample_128kb.bin");
+    setSenderPayload(buf, "chromabeam_sample_64kb.bin");
 }
 
 function setSenderPayload(uint8Bytes, filename) {
@@ -42,13 +94,15 @@ function setSenderPayload(uint8Bytes, filename) {
     fullPayload.set(metaBytes, 0);
     fullPayload.set(senderFileBytes, metaBytes.length);
 
-    const blockSize = Math.max(32, senderLayout.maxPayloadBytes - 16);
+    const blockSize = Math.max(24, senderLayout.maxPayloadBytes - 16);
     senderEncoder = new LTEncoder(fullPayload, blockSize);
     senderDropletSeed = 0;
     senderTotalSent = 0;
 
-    document.getElementById('senderFileLabel').textContent = `File: ${senderFilename}`;
-    document.getElementById('senderSizeLabel').textContent = `Size: ${(senderFileBytes.length / 1024).toFixed(1)} KB | Blocks K: ${senderEncoder.K} (Block: ${blockSize} B)`;
+    const fLbl = document.getElementById('senderFileLabel');
+    if (fLbl) fLbl.textContent = `File: ${senderFilename}`;
+    const sLbl = document.getElementById('senderSizeLabel');
+    if (sLbl) sLbl.textContent = `Size: ${(senderFileBytes.length / 1024).toFixed(1)} KB | Blocks K: ${senderEncoder.K} (Block: ${blockSize} B)`;
 }
 
 function renderIdleSenderFrame() {
@@ -62,6 +116,7 @@ function drawGridToCanvas(grid2D) {
     const N = senderLayout.gridSize;
     const size = senderCanvas.width;
     const cellSize = size / N;
+    const palette = senderLayout.palette;
 
     senderCtx.fillStyle = '#000000';
     senderCtx.fillRect(0, 0, size, size);
@@ -69,9 +124,8 @@ function drawGridToCanvas(grid2D) {
     for (let r = 0; r < N; r++) {
         for (let c = 0; c < N; c++) {
             const colorIdx = grid2D[r][c];
-            const [red, green, blue] = JS_COLOR_PALETTE[colorIdx];
+            const [red, green, blue] = palette[colorIdx] || [0, 0, 0];
             senderCtx.fillStyle = `rgb(${red}, ${green}, ${blue})`;
-            // Fill exact pixel cell (crisp integer bounds)
             senderCtx.fillRect(Math.floor(c * cellSize), Math.floor(r * cellSize), Math.ceil(cellSize), Math.ceil(cellSize));
         }
     }
@@ -114,7 +168,6 @@ function animateSenderStream(currentTime) {
             const grid2D = bytesToGridIndices(packet, senderLayout);
             drawGridToCanvas(grid2D);
 
-            // Update telemetry
             const elapsed = Math.max(0.001, (performance.now() - senderStartTime) / 1000.0);
             const kbSent = (senderTotalSent * packet.length) / 1024.0;
             const rate = kbSent / elapsed;
@@ -122,7 +175,7 @@ function animateSenderStream(currentTime) {
 
             document.getElementById('senderRateVal').textContent = `${rate.toFixed(1)} KB/s`;
             document.getElementById('senderDropletVal').textContent = `Droplets: ${senderTotalSent} (Seed #${seed})`;
-            document.getElementById('senderCycleVal').textContent = `Stream Cycles: ${cycles}x | Degree: ${degree}`;
+            document.getElementById('senderCycleVal').textContent = `Cycles: ${cycles}x | Degree: ${degree}`;
         }
     }
 
@@ -132,7 +185,6 @@ function animateSenderStream(currentTime) {
 function setupDragAndDrop() {
     const dropArea = document.getElementById('senderDropArea');
     const fileInput = document.getElementById('senderFileInput');
-
     if (!dropArea || !fileInput) return;
 
     ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
@@ -171,12 +223,17 @@ function handleSelectedFile(file) {
 }
 
 function updateSenderGridDensity(size) {
-    senderLayout = new JSColorMatrixLayout(size);
-    if (senderFileBytes) {
-        setSenderPayload(senderFileBytes, senderFilename);
-    } else {
-        renderIdleSenderFrame();
-    }
+    senderGridSize = size;
+    senderLayout = new JSColorMatrixLayout(senderGridSize, senderColorMode);
+    if (senderFileBytes) setSenderPayload(senderFileBytes, senderFilename);
+    else renderIdleSenderFrame();
+}
+
+function updateSenderColorMode(mode) {
+    senderColorMode = mode;
+    senderLayout = new JSColorMatrixLayout(senderGridSize, senderColorMode);
+    if (senderFileBytes) setSenderPayload(senderFileBytes, senderFilename);
+    else renderIdleSenderFrame();
 }
 
 function updateSenderFPS(fps) {

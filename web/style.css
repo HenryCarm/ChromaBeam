@@ -168,6 +168,49 @@ main {
     object-fit: cover;
 }
 
+/* Grandma Preset Cards */
+.preset-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 10px;
+}
+
+.preset-card {
+    background: #090d12;
+    border: 2px solid var(--card-border);
+    border-radius: 8px;
+    padding: 12px 8px;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.preset-card:hover {
+    border-color: var(--accent-blue);
+}
+
+.preset-card.active {
+    border-color: var(--accent-green-hover);
+    background: rgba(46, 160, 67, 0.1);
+}
+
+.preset-icon {
+    font-size: 22px;
+    margin-bottom: 4px;
+}
+
+.preset-name {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+.preset-sub {
+    font-size: 10px;
+    color: var(--text-secondary);
+    margin-top: 2px;
+}
+
 /* Form Controls & Buttons */
 .btn {
     display: inline-flex;
@@ -234,7 +277,7 @@ main {
 .drop-zone {
     border: 2px dashed #30363d;
     border-radius: 8px;
-    padding: 24px 16px;
+    padding: 20px 16px;
     text-align: center;
     cursor: pointer;
     transition: border-color 0.2s ease;
@@ -247,11 +290,11 @@ main {
 
 .drop-title {
     font-weight: 600;
-    margin-bottom: 4px;
+    margin-bottom: 2px;
 }
 
 .drop-subtitle {
-    font-size: 12px;
+    font-size: 11px;
     color: var(--text-secondary);
 }
 
@@ -334,26 +377,7 @@ select, input[type="range"] {
 }
 
 /* Badges */
-.badge-idle {
-    color: var(--text-secondary);
-    font-size: 12px;
-    font-weight: 600;
-}
-
-.badge-scanning {
-    color: #f0883e;
-    font-size: 12px;
-    font-weight: 600;
-}
-
-.badge-locked {
-    color: var(--accent-green-hover);
-    font-size: 12px;
-    font-weight: 600;
-}
-
-.badge-complete {
-    color: #58a6ff;
-    font-size: 12px;
-    font-weight: 700;
-}
+.badge-idle { color: var(--text-secondary); font-size: 12px; font-weight: 600; }
+.badge-scanning { color: #f0883e; font-size: 12px; font-weight: 600; }
+.badge-locked { color: var(--accent-green-hover); font-size: 12px; font-weight: 600; }
+.badge-complete { color: #58a6ff; font-size: 12px; font-weight: 700; }

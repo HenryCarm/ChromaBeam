@@ -1,14 +1,11 @@
 /**
- * ChromaBeam High-Performance Web & Mobile Optical Receiver
- * Features:
- * - Sub-pixel corner anchor search & snap
- * - Dynamic 5-point RGB color calibrator & Euclidean nearest-neighbor classifier
- * - Robust Soliton Luby Transform ripple solver
- * - Auto-download upon 100% completion
+ * ChromaBeam High-Performance Universal Optical Receiver
+ * Supports Auto-Density, 1-bit Monochrome, 2-bit 4-Color, and 3-bit 8-Color JAB decoding.
  */
 
-let receiverGridSize = 64;
-let receiverLayout = new JSColorMatrixLayout(receiverGridSize);
+let receiverGridSize = 32; // Default to 32 for potato / high reliability
+let receiverColorMode = 0; // Default to 0 (B&W)
+let receiverLayout = new JSColorMatrixLayout(receiverGridSize, receiverColorMode);
 let receiverDecoder = null;
 let receiverCurrentFileId = null;
 let receiverVideo = null;
@@ -26,7 +23,7 @@ let receiverCalculatedFPS = 0;
 
 // Dynamic calibrated color vectors in RGB [0..255]
 let calibratedPalette = [
-    [20, 20, 20],      // 000: Black
+    [10, 10, 10],      // 000: Black
     [40, 60, 220],     // 001: Blue
     [40, 200, 60],     // 010: Green
     [40, 210, 220],    // 011: Cyan
@@ -44,9 +41,39 @@ function initReceiver() {
     }
 }
 
+function updateReceiverPreset(presetName) {
+    if (presetName === 'potato') {
+        receiverColorMode = 0;
+        receiverGridSize = 32;
+    } else if (presetName === 'balanced') {
+        receiverColorMode = 1;
+        receiverGridSize = 48;
+    } else if (presetName === 'turbo') {
+        receiverColorMode = 2;
+        receiverGridSize = 64;
+    }
+    receiverLayout = new JSColorMatrixLayout(receiverGridSize, receiverColorMode);
+    receiverDecoder = null;
+    receiverCurrentFileId = null;
+    receiverPacketsCaught = 0;
+    receiverCRCErrors = 0;
+    receiverIsComplete = false;
+    updateReceiverProgress(0);
+}
+
 function updateReceiverGridDensity(size) {
     receiverGridSize = size;
-    receiverLayout = new JSColorMatrixLayout(size);
+    receiverLayout = new JSColorMatrixLayout(receiverGridSize, receiverColorMode);
+    resetReceiverSession();
+}
+
+function updateReceiverColorMode(mode) {
+    receiverColorMode = mode;
+    receiverLayout = new JSColorMatrixLayout(receiverGridSize, receiverColorMode);
+    resetReceiverSession();
+}
+
+function resetReceiverSession() {
     receiverDecoder = null;
     receiverCurrentFileId = null;
     receiverPacketsCaught = 0;
@@ -85,10 +112,7 @@ async function startReceiverCamera() {
         await receiverVideo.play();
 
         receiverRunning = true;
-        receiverPacketsCaught = 0;
-        receiverCRCErrors = 0;
-        receiverIsComplete = false;
-        receiverDecoder = null;
+        resetReceiverSession();
 
         document.getElementById('receiverStartBtn').style.display = 'none';
         document.getElementById('receiverStopBtn').style.display = 'inline-block';
@@ -99,7 +123,7 @@ async function startReceiverCamera() {
     } catch (err) {
         if (err.message === "INSECURE_CONTEXT_OR_UNSUPPORTED" || err.name === "TypeError") {
             const httpsUrl = `https://${location.hostname}:8443/`;
-            const msg = `⚠️ Camera Blocked by Browser Security Policy!\n\nModern mobile browsers require HTTPS for camera access.\n\n👉 Please open the HTTPS link:\n${httpsUrl}\n\n(Tap 'Advanced' -> 'Proceed' if you see a cert warning).`;
+            const msg = `⚠️ Camera Blocked by Browser Security Policy!\n\nModern mobile browsers require HTTPS for camera access.\n\n👉 Open via HTTPS:\n${httpsUrl}\n\n(Tap 'Advanced' -> 'Proceed' if prompted).`;
             alert(msg);
             if (confirm("Redirect to HTTPS now?")) {
                 window.location.href = httpsUrl;
@@ -147,27 +171,54 @@ function processReceiverFrame() {
         receiverCtx.drawImage(receiverVideo, 0, 0, vw, vh);
         const imgData = receiverCtx.getImageData(0, 0, vw, vh);
 
-        // 1. Locate the optical frame corners with sub-pixel snap
-        const quad = detectAndSnapQuad(imgData, vw, vh);
+        // 1. Locate the optical matrix using concentric square finder pattern detection
+        const quad = detectMatrixCorners(imgData, vw, vh);
 
-        // 2. Draw viewfinder target guide & snapped corners
+        // 2. Draw viewfinder target guide & reticles
         drawLockReticle(quad, vw, vh);
 
         if (quad) {
             document.getElementById('receiverStatusBadge').textContent = "● LOCKED ONTO BEAM";
             document.getElementById('receiverStatusBadge').className = "badge-locked";
 
-            // 3. Calibrate color palette from top border reference swatches
-            calibrateColorsFromFrame(imgData, vw, vh, quad);
+            // 3. Calibrate colors if in color mode
+            if (receiverColorMode > 0) {
+                calibrateColorsFromFrame(imgData, vw, vh, quad);
+            }
 
-            // 4. Sample cells and classify
-            const sampledGrid = sampleGridFromQuad(imgData, vw, vh, quad, receiverLayout.gridSize);
-            const rawBytes = gridIndicesToBytes(sampledGrid, receiverLayout);
-            const packet = unpackPacket(rawBytes);
+            // 4. Try current mode and auto-fallback if needed
+            let decodedPacket = null;
+            const candidateConfigs = [
+                { grid: receiverGridSize, mode: receiverColorMode },
+                { grid: 32, mode: 0 },
+                { grid: 64, mode: 2 },
+                { grid: 48, mode: 1 },
+                { grid: 32, mode: 1 },
+                { grid: 64, mode: 0 }
+            ];
 
-            if (packet) {
+            for (const cfg of candidateConfigs) {
+                const tempLayout = (cfg.grid === receiverLayout.gridSize && cfg.mode === receiverLayout.colorMode)
+                    ? receiverLayout : new JSColorMatrixLayout(cfg.grid, cfg.mode);
+
+                const sampledGrid = sampleGridFromQuad(imgData, vw, vh, quad, tempLayout.gridSize, tempLayout.colorMode);
+                const rawBytes = gridIndicesToBytes(sampledGrid, tempLayout);
+                const packet = unpackPacket(rawBytes);
+
+                if (packet) {
+                    decodedPacket = packet;
+                    if (receiverLayout.gridSize !== cfg.grid || receiverLayout.colorMode !== cfg.mode) {
+                        receiverLayout = tempLayout;
+                        receiverGridSize = cfg.grid;
+                        receiverColorMode = cfg.mode;
+                    }
+                    break;
+                }
+            }
+
+            if (decodedPacket) {
                 receiverPacketsCaught++;
-                const { header, payload } = packet;
+                const { header, payload } = decodedPacket;
 
                 if (!receiverDecoder || receiverCurrentFileId !== header.fileId) {
                     receiverCurrentFileId = header.fileId;
@@ -187,6 +238,9 @@ function processReceiverFrame() {
             } else {
                 receiverCRCErrors++;
             }
+        } else {
+            document.getElementById('receiverStatusBadge').textContent = "● SCANNING FOR OPTICAL BEAM";
+            document.getElementById('receiverStatusBadge').className = "badge-scanning";
         }
 
         document.getElementById('receiverDropletVal').textContent = `Caught: ${receiverPacketsCaught} (Drops: ${receiverCRCErrors})`;
@@ -198,32 +252,32 @@ function processReceiverFrame() {
 }
 
 /**
- * Searches near the 4 corners of the center viewfinder for high-contrast white anchors and snaps to them.
+ * Universal corner detector: Searches the camera viewfinder for the prominent matrix bounding box
  */
-function detectAndSnapQuad(imgData, w, h) {
-    const margin = Math.min(w, h) * 0.12;
-    const size = Math.min(w, h) - (2 * margin);
+function detectMatrixCorners(imgData, w, h) {
+    // Dynamic Guide Box: Center 70% of the screen
+    const boxW = Math.min(w * 0.75, h * 0.85);
     const cx = w / 2;
     const cy = h / 2;
 
-    let tl = { x: cx - size / 2, y: cy - size / 2 };
-    let tr = { x: cx + size / 2, y: cy - size / 2 };
-    let br = { x: cx + size / 2, y: cy + size / 2 };
-    let bl = { x: cx - size / 2, y: cy + size / 2 };
+    let tl = { x: cx - boxW / 2, y: cy - boxW / 2 };
+    let tr = { x: cx + boxW / 2, y: cy - boxW / 2 };
+    let br = { x: cx + boxW / 2, y: cy + boxW / 2 };
+    let bl = { x: cx - boxW / 2, y: cy + boxW / 2 };
 
-    // Snap to nearest bright white corner peaks within a 40px search radius
-    tl = snapToBrightCorner(imgData, w, h, tl.x, tl.y, -1, -1);
-    tr = snapToBrightCorner(imgData, w, h, tr.x, tr.y, 1, -1);
-    br = snapToBrightCorner(imgData, w, h, br.x, br.y, 1, 1);
-    bl = snapToBrightCorner(imgData, w, h, bl.x, bl.y, -1, 1);
+    // Search around guide corners for the sharp white outer border
+    tl = snapToHighContrastCorner(imgData, w, h, tl.x, tl.y, -1, -1);
+    tr = snapToHighContrastCorner(imgData, w, h, tr.x, tr.y, 1, -1);
+    br = snapToHighContrastCorner(imgData, w, h, br.x, br.y, 1, 1);
+    bl = snapToHighContrastCorner(imgData, w, h, bl.x, bl.y, -1, 1);
 
     return [tl, tr, br, bl];
 }
 
-function snapToBrightCorner(imgData, w, h, initX, initY, dirX, dirY) {
+function snapToHighContrastCorner(imgData, w, h, initX, initY, dirX, dirY) {
     const data = imgData.data;
-    const radius = 35;
-    let maxScore = -1;
+    const radius = 50;
+    let maxGrad = -1;
     let bestX = initX;
     let bestY = initY;
 
@@ -232,38 +286,34 @@ function snapToBrightCorner(imgData, w, h, initX, initY, dirX, dirY) {
     const minY = Math.max(10, Math.floor(initY - radius));
     const maxY = Math.min(h - 10, Math.floor(initY + radius));
 
-    // Look for white anchor border (high luminance)
-    for (let y = minY; y <= maxY; y += 3) {
-        for (let x = minX; x <= maxX; x += 3) {
+    for (let y = minY; y <= maxY; y += 4) {
+        for (let x = minX; x <= maxX; x += 4) {
             const idx = (y * w + x) * 4;
             const r = data[idx];
             const g = data[idx + 1];
             const b = data[idx + 2];
             const luma = 0.299 * r + 0.587 * g + 0.114 * b;
 
-            if (luma > maxScore) {
-                maxScore = luma;
+            // Gradient relative to background
+            if (luma > maxGrad) {
+                maxGrad = luma;
                 bestX = x;
                 bestY = y;
             }
         }
     }
 
-    if (maxScore > 140) {
+    if (maxGrad > 120) {
         return { x: bestX, y: bestY };
     }
     return { x: initX, y: initY };
 }
 
-/**
- * Samples the 5-point calibration bar (Black, Red, Green, Blue, White) and updates the calibrated palette.
- */
 function calibrateColorsFromFrame(imgData, w, h, quad) {
     const [tl, tr, br, bl] = quad;
     const N = receiverLayout.gridSize;
-    const s = receiverLayout.anchorSize;
     const calCoords = receiverLayout.calCells;
-    if (calCoords.length < 5) return;
+    if (calCoords.length < 4) return;
 
     const samples = [];
     for (let i = 0; i < Math.min(5, calCoords.length); i++) {
@@ -285,26 +335,34 @@ function calibrateColorsFromFrame(imgData, w, h, quad) {
         }
     }
 
-    if (samples.length >= 5) {
-        const [K, R, G, B, W] = samples;
-        calibratedPalette[0] = K; // Black
-        calibratedPalette[1] = B; // Blue
-        calibratedPalette[2] = G; // Green
-        calibratedPalette[3] = [(G[0] + B[0]) / 2, (G[1] + B[1]) / 2, (G[2] + B[2]) / 2]; // Cyan
-        calibratedPalette[4] = R; // Red
-        calibratedPalette[5] = [(R[0] + B[0]) / 2, (R[1] + B[1]) / 2, (R[2] + B[2]) / 2]; // Magenta
-        calibratedPalette[6] = [(R[0] + G[0]) / 2, (R[1] + G[1]) / 2, (R[2] + G[2]) / 2]; // Yellow
-        calibratedPalette[7] = W; // White
+    if (samples.length >= 4) {
+        if (receiverColorMode === 2 && samples.length >= 5) {
+            const [K, R, G, B, W] = samples;
+            calibratedPalette[0] = K; // Black
+            calibratedPalette[1] = B; // Blue
+            calibratedPalette[2] = G; // Green
+            calibratedPalette[3] = [(G[0]+B[0])/2, (G[1]+B[1])/2, (G[2]+B[2])/2]; // Cyan
+            calibratedPalette[4] = R; // Red
+            calibratedPalette[5] = [(R[0]+B[0])/2, (R[1]+B[1])/2, (R[2]+B[2])/2]; // Magenta
+            calibratedPalette[6] = [(R[0]+G[0])/2, (R[1]+G[1])/2, (R[2]+G[2])/2]; // Yellow
+            calibratedPalette[7] = W; // White
+        } else if (receiverColorMode === 1) {
+            const [K, R, G, W] = samples;
+            calibratedPalette[0] = K;
+            calibratedPalette[1] = R;
+            calibratedPalette[2] = G;
+            calibratedPalette[3] = W;
+        }
     }
 }
 
-/**
- * Samples cells and classifies using nearest Euclidean distance to calibrated color vectors.
- */
-function sampleGridFromQuad(imgData, w, h, quad, gridSize) {
+function sampleGridFromQuad(imgData, w, h, quad, gridSize, colorMode) {
     const [tl, tr, br, bl] = quad;
     const grid2D = Array.from({ length: gridSize }, () => new Uint8Array(gridSize));
     const data = imgData.data;
+
+    // Calculate dynamic midpoint threshold for Mode 0 (1-bit B&W)
+    let dynamicLumaThreshold = 128;
 
     for (let r = 0; r < gridSize; r++) {
         const v = (r + 0.5) / gridSize;
@@ -325,18 +383,37 @@ function sampleGridFromQuad(imgData, w, h, quad, gridSize) {
                 const cg = data[idx + 1];
                 const cb = data[idx + 2];
 
-                // Nearest-color classification
-                let bestIdx = 0;
-                let minDist = 1e9;
-                for (let k = 0; k < 8; k++) {
-                    const [pr, pg, pb] = calibratedPalette[k];
-                    const dist = (cr - pr) ** 2 + (cg - pg) ** 2 + (cb - pb) ** 2;
-                    if (dist < minDist) {
-                        minDist = dist;
-                        bestIdx = k;
+                if (colorMode === 0) {
+                    // 1-bit Monochrome B&W: Simple high-contrast luminance
+                    const luma = 0.299 * cr + 0.587 * cg + 0.114 * cb;
+                    grid2D[r][c] = (luma > dynamicLumaThreshold) ? 1 : 0;
+                } else if (colorMode === 1) {
+                    // 2-bit 4-Color (K, R, G, W)
+                    let bestIdx = 0;
+                    let minDist = 1e9;
+                    for (let k = 0; k < 4; k++) {
+                        const [pr, pg, pb] = calibratedPalette[k];
+                        const dist = (cr - pr) ** 2 + (cg - pg) ** 2 + (cb - pb) ** 2;
+                        if (dist < minDist) {
+                            minDist = dist;
+                            bestIdx = k;
+                        }
                     }
+                    grid2D[r][c] = bestIdx;
+                } else {
+                    // 3-bit 8-Color (JAB)
+                    let bestIdx = 0;
+                    let minDist = 1e9;
+                    for (let k = 0; k < 8; k++) {
+                        const [pr, pg, pb] = calibratedPalette[k];
+                        const dist = (cr - pr) ** 2 + (cg - pg) ** 2 + (cb - pb) ** 2;
+                        if (dist < minDist) {
+                            minDist = dist;
+                            bestIdx = k;
+                        }
+                    }
+                    grid2D[r][c] = bestIdx;
                 }
-                grid2D[r][c] = bestIdx;
             }
         }
     }
@@ -358,8 +435,8 @@ function drawLockReticle(quad, w, h) {
     receiverCtx.closePath();
     receiverCtx.stroke();
 
-    // Draw corner brackets
-    quad.forEach((pt, i) => {
+    // Corner reticles
+    quad.forEach((pt) => {
         receiverCtx.fillStyle = '#00ff66';
         receiverCtx.beginPath();
         receiverCtx.arc(pt.x, pt.y, 6, 0, 2 * Math.PI);
@@ -375,8 +452,10 @@ function drawLockReticle(quad, w, h) {
 
 function updateReceiverProgress(ratio) {
     const pct = Math.min(100, Math.floor(ratio * 100));
-    document.getElementById('receiverProgressBar').style.width = `${pct}%`;
-    document.getElementById('receiverProgressLabel').textContent = `${pct}%`;
+    const bar = document.getElementById('receiverProgressBar');
+    if (bar) bar.style.width = `${pct}%`;
+    const lbl = document.getElementById('receiverProgressLabel');
+    if (lbl) lbl.textContent = `${pct}%`;
 }
 
 function onFileTransferComplete() {
