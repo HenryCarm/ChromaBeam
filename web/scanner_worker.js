@@ -23,20 +23,14 @@ if (typeof importScripts === 'function') {
 }
 
 const CANDIDATE_CONFIGS = [
+    { grid: 64, mode: 0, label: '64×64 B&W (Default)' },
+    { grid: 48, mode: 1, label: '48×48 4-Color (Balanced)' },
+    { grid: 64, mode: 2, label: '64×64 8-Color (Turbo)' },
     { grid: 32, mode: 0, label: '32×32 B&W (Potato)' },
-    { grid: 48, mode: 0, label: '48×48 B&W' },
-    { grid: 64, mode: 0, label: '64×64 B&W' },
     { grid: 32, mode: 1, label: '32×32 4-Color' },
-    { grid: 48, mode: 1, label: '48×48 4-Color' },
+    { grid: 48, mode: 0, label: '48×48 B&W' },
     { grid: 64, mode: 1, label: '64×64 4-Color' },
-    { grid: 128, mode: 1, label: '128×128 4-Color' },
-    { grid: 48, mode: 2, label: '48×48 8-Color' },
-    { grid: 64, mode: 2, label: '64×64 8-Color' },
-    { grid: 128, mode: 2, label: '128×128 8-Color' },
-    { grid: 256, mode: 2, label: '256×256 8-Color' },
-    { grid: 512, mode: 2, label: '512×512 8-Color' },
-    { grid: 1024, mode: 2, label: '1024×1024 8-Color' },
-    { grid: 2048, mode: 2, label: '2048×2048 8-Color' },
+    { grid: 48, mode: 2, label: '48×48 8-Color' }
 ];
 
 let CACHED_LAYOUTS = {};
@@ -56,7 +50,6 @@ let workerIsComplete = false;
 let workerLockedConfig = null;
 let workerFrameCount = 0;
 let workerLastLockedQuad = null;
-let workerLockStreak = 0;
 
 function resetWorkerSession() {
     workerDecoder = null;
@@ -67,7 +60,6 @@ function resetWorkerSession() {
     workerLockedConfig = null;
     workerFrameCount = 0;
     workerLastLockedQuad = null;
-    workerLockStreak = 0;
 }
 
 function base64ToUint8Array(base64) {
@@ -87,7 +79,7 @@ function scanCroppedQR(fullBuffer, imgW, imgH, rx, ry, rw, rh) {
     ry = Math.max(0, Math.floor(ry));
     rw = Math.min(imgW - rx, Math.floor(rw));
     rh = Math.min(imgH - ry, Math.floor(rh));
-    if (rw < 50 || rh < 50) return null;
+    if (rw < 40 || rh < 40) return null;
 
     const cropBuf = new Uint8ClampedArray(rw * rh * 4);
     for (let y = 0; y < rh; y++) {
@@ -96,7 +88,7 @@ function scanCroppedQR(fullBuffer, imgW, imgH, rx, ry, rw, rh) {
         cropBuf.set(fullBuffer.subarray(srcOffset, srcOffset + rw * 4), dstOffset);
     }
 
-    const res = jsQR(cropBuf, rw, rh, { inversionAttempts: "attemptBoth" });
+    const res = jsQR(cropBuf, rw, rh, { inversionAttempts: "dontInvert" });
     if (res && res.data) {
         return {
             data: res.data,
@@ -134,7 +126,6 @@ self.onmessage = function(e) {
             const { width, height, guideRect } = msg;
 
             if (!msg.buffer || msg.buffer.byteLength === 0) {
-                log(`[F${frameNum}] Empty frame buffer received`);
                 sendResult(logLines, startTime);
                 return;
             }
@@ -145,7 +136,7 @@ self.onmessage = function(e) {
                 height
             };
 
-            const verbose = (frameNum <= 3) || (frameNum % 45 === 0);
+            const verbose = (frameNum <= 3) || (frameNum % 30 === 0);
 
             if (workerIsComplete) {
                 self.postMessage({
@@ -168,33 +159,14 @@ self.onmessage = function(e) {
             let lastLumaMetrics = null;
 
             // =========================================================================
-            // PASS 1: High-Speed Scandit-Style Multi-Tier QR Detection
+            // PASS 1: Ultra-Fast Standard QR Decoding (Sub-5ms Viewfinder Path)
             // =========================================================================
             if (typeof jsQR === 'function') {
                 let qrRes = null;
 
-                // Tier 1: Locked Tracking ROI (Tight 25% padding around last known quad)
-                if (workerLastLockedQuad) {
-                    const xs = workerLastLockedQuad.map(p => p.x);
-                    const ys = workerLastLockedQuad.map(p => p.y);
-                    const minX = Math.min(...xs);
-                    const maxX = Math.max(...xs);
-                    const minY = Math.min(...ys);
-                    const maxY = Math.max(...ys);
-                    const padX = (maxX - minX) * 0.25;
-                    const padY = (maxY - minY) * 0.25;
-
-                    qrRes = scanCroppedQR(
-                        imgData.data, width, height,
-                        minX - padX, minY - padY,
-                        (maxX - minX) + padX * 2, (maxY - minY) + padY * 2
-                    );
-                    if (qrRes) detectMethod = "1:1:3:1:1 QR (Track Lock)";
-                }
-
-                // Tier 2: Viewfinder ROI (The green guide box)
-                if (!qrRes && guideRect && guideRect.w > 50 && guideRect.h > 50) {
-                    const pad = guideRect.w * 0.10;
+                // Priority 1: Viewfinder ROI (Ultra-fast crop where user points camera)
+                if (guideRect && guideRect.w > 40 && guideRect.h > 40) {
+                    const pad = guideRect.w * 0.08;
                     qrRes = scanCroppedQR(
                         imgData.data, width, height,
                         guideRect.x - pad, guideRect.y - pad,
@@ -203,10 +175,10 @@ self.onmessage = function(e) {
                     if (qrRes) detectMethod = "1:1:3:1:1 QR (Viewfinder ROI)";
                 }
 
-                // Tier 3: Full Frame Fallback
-                if (!qrRes) {
+                // Priority 2: Full Frame (Only check if viewfinder missed and frame % 4 == 0)
+                if (!qrRes && (frameNum % 4 === 0)) {
                     qrRes = jsQR(imgData.data, width, height, {
-                        inversionAttempts: "attemptBoth"
+                        inversionAttempts: "dontInvert"
                     });
                     if (qrRes) detectMethod = "1:1:3:1:1 QR (Full Frame)";
                 }
@@ -230,7 +202,6 @@ self.onmessage = function(e) {
                                     qrRes.location.bottomLeftCorner
                                 ];
                                 workerLastLockedQuad = quad;
-                                workerLockStreak++;
                                 if (verbose) {
                                     log(`[F${frameNum}] 🎯 jsQR locked! Seed #${packet.header.seed} fileId=${packet.header.fileId}`);
                                 }
@@ -240,11 +211,7 @@ self.onmessage = function(e) {
                         // Invalid QR payload
                     }
                 } else {
-                    // Missed frame: degrade lock streak
-                    if (workerLastLockedQuad) {
-                        workerLockStreak--;
-                        if (workerLockStreak <= 0) workerLastLockedQuad = null;
-                    }
+                    workerLastLockedQuad = null;
                 }
             }
 
@@ -252,18 +219,9 @@ self.onmessage = function(e) {
             // PASS 2: Custom Multi-Color Optical Matrix Detection (3D Homography)
             // =========================================================================
             if (!decodedResult) {
-                let triedLock = false;
-                
-                // Tier 1: Steady Lock (Reuse last known quad)
-                if (workerLastLockedQuad) {
-                    quad = workerLastLockedQuad;
-                    detectMethod = "Color Matrix (Track Lock)";
-                    triedLock = true;
-                } else {
-                    const detectRes = detectOpticalQuad(imgData, width, height, guideRect);
-                    quad = detectRes.quad;
-                    detectMethod = detectRes.method;
-                }
+                const detectRes = detectOpticalQuad(imgData, width, height, guideRect);
+                quad = detectRes.quad;
+                detectMethod = detectRes.method;
 
                 if (quad) {
                     const configsToTest = workerLockedConfig ? [workerLockedConfig] : CANDIDATE_CONFIGS;
@@ -282,51 +240,22 @@ self.onmessage = function(e) {
                         };
 
                         let res = decodeGridMultiOrientation(sampleRes.grid2D, layout);
-
                         if (res) {
                             decodedResult = res;
                             matchedConfigLabel = `${cfg.label} (${res.rotationDeg}° rot)`;
                             workerLockedConfig = cfg;
                             workerLastLockedQuad = quad;
-                            workerLockStreak++;
                             break;
                         }
                     }
 
                     if (!decodedResult) {
-                        // If we failed with lock, fall back to re-detecting
-                        if (triedLock) {
-                            workerLockStreak--;
-                            if (workerLockStreak <= 0) workerLastLockedQuad = null;
-                            
-                            const detectRes = detectOpticalQuad(imgData, width, height, guideRect);
-                            quad = detectRes.quad;
-                            detectMethod = detectRes.method;
-                            
-                            if (quad) {
-                                for (const cfg of configsToTest) {
-                                    const layoutKey = `${cfg.grid}_${cfg.mode}`;
-                                    const layout = CACHED_LAYOUTS[layoutKey];
-                                    if (!layout) continue;
-                                    
-                                    const sampleRes = sampleQuadGrid(imgData, width, height, quad, layout);
-                                    let res = decodeGridMultiOrientation(sampleRes.grid2D, layout);
-                                    if (res) {
-                                        decodedResult = res;
-                                        matchedConfigLabel = `${cfg.label} (${res.rotationDeg}° rot)`;
-                                        workerLockedConfig = cfg;
-                                        workerLastLockedQuad = quad;
-                                        workerLockStreak++;
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                        
-                        if (!decodedResult && workerLockedConfig) {
-                            workerLockedConfig = null;
-                        }
+                        workerLockedConfig = null;
+                        workerLastLockedQuad = null;
                     }
+                } else {
+                    workerLockedConfig = null;
+                    workerLastLockedQuad = null;
                 }
             }
 
@@ -390,6 +319,7 @@ self.onmessage = function(e) {
                     rotationDeg: rotationDeg || 0,
                     lumaMetrics: lastLumaMetrics,
                     latencyMs,
+                    scaleFactor: msg.scaleFactor || 1,
                     isComplete: workerIsComplete,
                     fileResult,
                     logMsg: `[DECODE] Droplet #${header.seed} solved: ${solvedCount}/${totalCount} (${progressPct})` + (allLogs ? '\n' + allLogs : '')
@@ -409,6 +339,7 @@ self.onmessage = function(e) {
                     locked: false,
                     quad,
                     detectMethod,
+                    scaleFactor: msg.scaleFactor || 1,
                     caught: workerPacketsCaught,
                     drops: workerCRCErrors,
                     progress: progressRatio,
