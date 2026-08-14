@@ -1,24 +1,26 @@
 /**
- * ChromaBeam JavaScript Optical Color Matrix Engine
+ * ChromaBeam Multi-Mode Optical Matrix Engine (JS)
  */
 
-const JS_COLOR_PALETTE = [
-    [0,   0,   0],    // 000: Black
-    [0,   0,   255],  // 001: Blue
-    [0,   255, 0],    // 010: Green
-    [0,   255, 255],  // 011: Cyan
-    [255, 0,   0],    // 100: Red
-    [255, 0,   255],  // 101: Magenta
-    [255, 255, 0],    // 110: Yellow
-    [255, 255, 255]   // 111: White
-];
+const PALETTES = {
+    0: [ [0, 0, 0], [255, 255, 255] ], // 1-bit B&W
+    1: [ [0, 0, 0], [255, 50, 50], [50, 255, 50], [255, 255, 255] ], // 2-bit 4-Color
+    2: [ // 3-bit 8-Color RGB
+        [0, 0, 0], [0, 0, 255], [0, 255, 0], [0, 255, 255],
+        [255, 0, 0], [255, 0, 255], [255, 255, 0], [255, 255, 255]
+    ]
+};
 
 const JS_ANCHOR_SIZE = 5;
 
 class JSColorMatrixLayout {
-    constructor(gridSize = 48) {
+    constructor(gridSize = 48, colorMode = 2) {
         this.gridSize = gridSize;
+        this.colorMode = colorMode;
         this.anchorSize = JS_ANCHOR_SIZE;
+        this.palette = PALETTES[colorMode] || PALETTES[2];
+        this.bitsPerCell = (colorMode === 0) ? 1 : (colorMode === 1 ? 2 : 3);
+
         this.dataCoords = [];
         this.calCells = [];
         this.timingCells = [];
@@ -33,13 +35,11 @@ class JSColorMatrixLayout {
         }
 
         // 2. Timing tracks
-        // Top timing track (rest of top row)
         for (let c = calEnd; c < N - s; c++) {
-            this.timingCells.push({ r: 0, c, colorIdx: (c % 2) * 7 });
+            this.timingCells.push({ r: 0, c, colorIdx: (c % 2) ? (this.palette.length - 1) : 0 });
         }
-        // Bottom timing track
         for (let c = s; c < N - s; c++) {
-            this.timingCells.push({ r: N - 1, c, colorIdx: (c % 2) * 7 });
+            this.timingCells.push({ r: N - 1, c, colorIdx: (c % 2) ? (this.palette.length - 1) : 0 });
         }
 
         // 3. Data cells
@@ -59,43 +59,45 @@ class JSColorMatrixLayout {
         }
 
         this.numDataCells = this.dataCoords.length;
-        this.maxPayloadBits = this.numDataCells * 3;
+        this.maxPayloadBits = this.numDataCells * this.bitsPerCell;
         this.maxPayloadBytes = Math.floor(this.maxPayloadBits / 8);
     }
 
     renderAnchors(grid2D) {
         const s = this.anchorSize;
         const N = this.gridSize;
+        const white = this.palette.length - 1;
+        const black = 0;
 
-        // TL: Concentric
-        for (let r = 0; r < s; r++) for (let c = 0; c < s; c++) grid2D[r][c] = 7; // White
-        for (let r = 1; r < s - 1; r++) for (let c = 1; c < s - 1; c++) grid2D[r][c] = 0; // Black
-        for (let r = 2; r < s - 2; r++) for (let c = 2; c < s - 2; c++) grid2D[r][c] = 7; // Center dot
+        // 1:1:1:1:1 Concentric square anchors
+        // TL
+        for (let r = 0; r < s; r++) for (let c = 0; c < s; c++) grid2D[r][c] = white;
+        for (let r = 1; r < s - 1; r++) for (let c = 1; c < s - 1; c++) grid2D[r][c] = black;
+        grid2D[2][2] = white;
 
-        // TR: White box with inner notch
-        for (let r = 0; r < s; r++) for (let c = N - s; c < N; c++) grid2D[r][c] = 7;
-        for (let r = 1; r < s - 1; r++) for (let c = N - s + 1; c < N - 1; c++) grid2D[r][c] = 0;
-        grid2D[1][N - 2] = 7;
+        // TR
+        for (let r = 0; r < s; r++) for (let c = N - s; c < N; c++) grid2D[r][c] = white;
+        for (let r = 1; r < s - 1; r++) for (let c = N - s + 1; c < N - 1; c++) grid2D[r][c] = black;
+        grid2D[2][N - 3] = (this.palette.length > 4) ? 4 : white; // Red dot if 8-color
 
-        // BR: Concentric with Red target
-        for (let r = N - s; r < N; r++) for (let c = N - s; c < N; c++) grid2D[r][c] = 7;
-        for (let r = N - s + 1; r < N - 1; r++) for (let c = N - s + 1; c < N - 1; c++) grid2D[r][c] = 0;
-        for (let r = N - s + 2; r < N - 2; r++) for (let c = N - s + 2; c < N - 2; c++) grid2D[r][c] = 4; // Red center
+        // BR
+        for (let r = N - s; r < N; r++) for (let c = N - s; c < N; c++) grid2D[r][c] = white;
+        for (let r = N - s + 1; r < N - 1; r++) for (let c = N - s + 1; c < N - 1; c++) grid2D[r][c] = black;
+        grid2D[N - 3][N - 3] = (this.palette.length > 2) ? 2 : white; // Green dot
 
-        // BL: Crosshair
-        for (let r = N - s; r < N; r++) for (let c = 0; c < s; c++) grid2D[r][c] = 7;
-        for (let r = N - s + 1; r < N - 1; r++) for (let c = 1; c < s - 1; c++) grid2D[r][c] = 0;
-        for (let r = N - s + 2; r < N - 2; r++) for (let c = 1; c < s - 1; c++) grid2D[r][c] = 7;
-        for (let r = N - s + 1; r < N - 1; r++) for (let c = 2; c < s - 2; c++) grid2D[r][c] = 7;
+        // BL
+        for (let r = N - s; r < N; r++) for (let c = 0; c < s; c++) grid2D[r][c] = white;
+        for (let r = N - s + 1; r < N - 1; r++) for (let c = 1; c < s - 1; c++) grid2D[r][c] = black;
+        grid2D[N - 3][2] = white;
 
-        // Calibration Bar: K, R, G, B, W
-        const calColors = [0, 4, 2, 1, 7];
-        for (let i = 0; i < Math.min(this.calCells.length, calColors.length); i++) {
+        // Calibration swatches
+        let calIdxs = (this.colorMode === 2) ? [0, 4, 2, 1, 7] : ((this.colorMode === 1) ? [0, 1, 2, 3] : [0, 1, 0, 1]);
+        for (let i = 0; i < Math.min(this.calCells.length, calIdxs.length); i++) {
             const { r, c } = this.calCells[i];
-            grid2D[r][c] = calColors[i];
+            grid2D[r][c] = Math.min(calIdxs[i], this.palette.length - 1);
         }
 
-        // Timing Tracks
+        // Timing tracks
         for (const { r, c, colorIdx } of this.timingCells) {
             grid2D[r][c] = colorIdx;
         }
@@ -107,26 +109,27 @@ function bytesToGridIndices(uint8Data, layout) {
     const grid2D = Array.from({ length: N }, () => new Uint8Array(N));
     layout.renderAnchors(grid2D);
 
-    // Unpack bits from bytes
     const bits = [];
     for (let i = 0; i < uint8Data.length; i++) {
         const b = uint8Data[i];
-        for (let k = 7; k >= 0; k--) {
-            bits.push((b >> k) & 1);
-        }
+        for (let k = 7; k >= 0; k--) bits.push((b >> k) & 1);
     }
 
-    // Pad to multiple of 3
-    while (bits.length % 3 !== 0) bits.push(0);
+    const bpc = layout.bitsPerCell;
+    while (bits.length % bpc !== 0) bits.push(0);
 
-    const numTriplets = Math.floor(bits.length / 3);
-    const numToDraw = Math.min(numTriplets, layout.numDataCells);
+    const numChunks = Math.floor(bits.length / bpc);
+    const numToDraw = Math.min(numChunks, layout.numDataCells);
 
     for (let i = 0; i < numToDraw; i++) {
-        const b0 = bits[i * 3];
-        const b1 = bits[i * 3 + 1];
-        const b2 = bits[i * 3 + 2];
-        const colorIdx = (b0 << 2) | (b1 << 1) | b2;
+        let colorIdx = 0;
+        if (bpc === 1) {
+            colorIdx = bits[i];
+        } else if (bpc === 2) {
+            colorIdx = (bits[i * 2] << 1) | bits[i * 2 + 1];
+        } else {
+            colorIdx = (bits[i * 3] << 2) | (bits[i * 3 + 1] << 1) | bits[i * 3 + 2];
+        }
         const { r, c } = layout.dataCoords[i];
         grid2D[r][c] = colorIdx;
     }
@@ -134,15 +137,23 @@ function bytesToGridIndices(uint8Data, layout) {
     return grid2D;
 }
 
-function gridIndicesToBytes(grid2D, layout, rgbThreshold = 128) {
+function gridIndicesToBytes(grid2D, layout) {
     const bits = [];
+    const bpc = layout.bitsPerCell;
+
     for (let i = 0; i < layout.numDataCells; i++) {
         const { r, c } = layout.dataCoords[i];
         const colorIdx = grid2D[r][c];
-        // 3 bits
-        bits.push((colorIdx >> 2) & 1);
-        bits.push((colorIdx >> 1) & 1);
-        bits.push(colorIdx & 1);
+        if (bpc === 1) {
+            bits.push(colorIdx & 1);
+        } else if (bpc === 2) {
+            bits.push((colorIdx >> 1) & 1);
+            bits.push(colorIdx & 1);
+        } else {
+            bits.push((colorIdx >> 2) & 1);
+            bits.push((colorIdx >> 1) & 1);
+            bits.push(colorIdx & 1);
+        }
     }
 
     const numBytes = Math.floor(bits.length / 8);

@@ -1,14 +1,32 @@
 """
-ChromaBeam Optical Color Matrix Synthesizer & Rasterizer
-Handles 3-bit RGB color multiplexing, 4-corner ArUco/geometric anchors, timing tracks, calibration borders, and rasterization.
+ChromaBeam Multi-Mode Optical Color Matrix Engine
+Supports:
+- Mode 0: 1-Bit High-Contrast Monochrome (Potato Camera / Low Light / Max Reliability)
+- Mode 1: 2-Bit 4-Color Palette (Balanced)
+- Mode 2: 3-Bit 8-Color RGB Palette (Turbo Speed)
+Includes self-describing header encoding so the receiver automatically identifies mode and density!
 """
 
 import numpy as np
 from typing import Tuple, List, Optional
 
-# 3-bit RGB Color Table (R, G, B in 0-255)
-# Index: (R << 2) | (G << 1) | B
-COLOR_PALETTE = np.array([
+# Color Palettes
+# Mode 0: 1-bit Monochrome (Black, White)
+PALETTE_1BIT = np.array([
+    [0,   0,   0],    # 0: Black
+    [255, 255, 255]   # 1: White
+], dtype=np.uint8)
+
+# Mode 1: 2-bit 4-Color (Black, Red, Green, White)
+PALETTE_2BIT = np.array([
+    [0,   0,   0],    # 00: Black
+    [255, 50,  50],   # 01: Red
+    [50,  255, 50],   # 10: Green
+    [255, 255, 255]   # 11: White
+], dtype=np.uint8)
+
+# Mode 2: 3-bit 8-Color RGB (JAB)
+PALETTE_3BIT = np.array([
     [0,   0,   0],    # 000: Black
     [0,   0,   255],  # 001: Blue
     [0,   255, 0],    # 010: Green
@@ -16,103 +34,110 @@ COLOR_PALETTE = np.array([
     [255, 0,   0],    # 100: Red
     [255, 0,   255],  # 101: Magenta
     [255, 255, 0],    # 110: Yellow
-    [255, 255, 255],  # 111: White
+    [255, 255, 255]   # 111: White
 ], dtype=np.uint8)
 
-# Corner Anchor size in cells
 ANCHOR_SIZE = 5
+
+MODE_1BIT_BW = 0
+MODE_2BIT_4COLOR = 1
+MODE_3BIT_8COLOR = 2
 
 
 class ColorMatrixLayout:
-    """
-    Computes grid coordinates, payload cell masks, timing tracks, and anchor positions for an M x M grid.
-    """
-    def __init__(self, grid_size: int = 48):
+    def __init__(self, grid_size: int = 48, color_mode: int = MODE_3BIT_8COLOR):
         self.grid_size = grid_size
+        self.color_mode = color_mode
         self.anchor_size = ANCHOR_SIZE
-        
-        # Binary mask: 1 = data cell, 0 = reserved (anchor, calibration, or timing track)
+
+        if self.color_mode == MODE_1BIT_BW:
+            self.palette = PALETTE_1BIT
+            self.bits_per_cell = 1
+        elif self.color_mode == MODE_2BIT_4COLOR:
+            self.palette = PALETTE_2BIT
+            self.bits_per_cell = 2
+        else:
+            self.palette = PALETTE_3BIT
+            self.bits_per_cell = 3
+
+        # Binary mask: 1 = data cell, 0 = reserved
         self.data_mask = np.ones((grid_size, grid_size), dtype=bool)
-        
-        # 1. Mark 4 corners as reserved for anchors
         s = self.anchor_size
-        self.data_mask[0:s, 0:s] = False                                     # Top-Left (TL)
-        self.data_mask[0:s, grid_size-s:grid_size] = False                   # Top-Right (TR)
-        self.data_mask[grid_size-s:grid_size, 0:s] = False                   # Bottom-Left (BL)
-        self.data_mask[grid_size-s:grid_size, grid_size-s:grid_size] = False # Bottom-Right (BR)
-        
-        # 2. Calibration cells along top border
+        N = self.grid_size
+
+        # 4 Corners reserved for 1:1:1:1:1 concentric square anchors
+        self.data_mask[0:s, 0:s] = False
+        self.data_mask[0:s, N-s:N] = False
+        self.data_mask[N-s:N, 0:s] = False
+        self.data_mask[N-s:N, N-s:N] = False
+
+        # Top border: Calibration & Mode Header cells
         cal_start = s
-        cal_end = min(grid_size - s, cal_start + 5)
+        cal_end = min(N - s, s + 6)
         self.cal_cells = []
         for c in range(cal_start, cal_end):
             self.data_mask[0, c] = False
             self.cal_cells.append((0, c))
 
-        # 3. Top and Bottom Timing Tracks (alternating Black/White clock ticks)
+        # Timing Tracks along top and bottom
         self.timing_cells = []
-        # Top timing track (rest of top row)
-        for c in range(cal_end, grid_size - s):
+        for c in range(cal_end, N - s):
             self.data_mask[0, c] = False
-            self.timing_cells.append((0, c, (c % 2) * 7))  # 0 or 7 (Black/White)
+            self.timing_cells.append((0, c, (c % 2)))
 
-        # Bottom timing track
-        for c in range(s, grid_size - s):
-            self.data_mask[grid_size - 1, c] = False
-            self.timing_cells.append((grid_size - 1, c, (c % 2) * 7))
+        for c in range(s, N - s):
+            self.data_mask[N - 1, c] = False
+            self.timing_cells.append((N - 1, c, (c % 2)))
 
-        # Flattened list of data cell coordinates (row, col)
         self.data_coords = np.argwhere(self.data_mask)
         self.num_data_cells = len(self.data_coords)
-        
-        # 3 bits per cell -> Total available payload bytes
-        self.max_payload_bits = self.num_data_cells * 3
+        self.max_payload_bits = self.num_data_cells * self.bits_per_cell
         self.max_payload_bytes = self.max_payload_bits // 8
 
     def render_anchors(self, grid: np.ndarray):
-        """
-        Renders distinct high-contrast geometric anchors in the 4 corners,
-        plus timing tracks and calibration swatches.
-        """
         s = self.anchor_size
         N = self.grid_size
+        white = self.palette[-1]
+        black = self.palette[0]
 
-        # Anchor 0: Top-Left (Concentric box with solid center)
-        grid[0:s, 0:s] = COLOR_PALETTE[7]  # White outer border
-        grid[1:s-1, 1:s-1] = COLOR_PALETTE[0]  # Black ring
-        grid[2:s-2, 2:s-2] = COLOR_PALETTE[7]  # White center dot
+        # 1:1:1:1:1 Concentric Nested Square Finder Patterns in all 4 corners
+        # Top-Left: Solid White outer (5x5), Black ring (3x3), White center (1x1)
+        grid[0:s, 0:s] = white
+        grid[1:s-1, 1:s-1] = black
+        grid[2:s-2, 2:s-2] = white
 
-        # Anchor 1: Top-Right (Solid White box with single Black corner notch)
-        grid[0:s, N-s:N] = COLOR_PALETTE[7]
-        grid[1:s-1, N-s+1:N-1] = COLOR_PALETTE[0]
-        grid[1, N-2] = COLOR_PALETTE[7]
+        # Top-Right: Solid White outer, Black ring, Red center dot
+        grid[0:s, N-s:N] = white
+        grid[1:s-1, N-s+1:N-1] = black
+        grid[2:s-2, N-s+2:N-2] = self.palette[min(4, len(self.palette)-1)]
 
-        # Anchor 2: Bottom-Right (Concentric Black/White target with Red center for orientation)
-        grid[N-s:N, N-s:N] = COLOR_PALETTE[7]
-        grid[N-s+1:N-1, N-s+1:N-1] = COLOR_PALETTE[0]
-        grid[N-s+2:N-2, N-s+2:N-2] = COLOR_PALETTE[4]
+        # Bottom-Right: Solid White outer, Black ring, Green center dot
+        grid[N-s:N, N-s:N] = white
+        grid[N-s+1:N-1, N-s+1:N-1] = black
+        grid[N-s+2:N-2, N-s+2:N-2] = self.palette[min(2, len(self.palette)-1)]
 
-        # Anchor 3: Bottom-Left (Crosshair pattern)
-        grid[N-s:N, 0:s] = COLOR_PALETTE[7]
-        grid[N-s+1:N-1, 1:s-1] = COLOR_PALETTE[0]
-        grid[N-s+2:N-2, 1:s-1] = COLOR_PALETTE[7]
-        grid[N-s+1:N-1, 2:s-2] = COLOR_PALETTE[7]
+        # Bottom-Left: Solid White outer, Black ring, Blue/White center dot
+        grid[N-s:N, 0:s] = white
+        grid[N-s+1:N-1, 1:s-1] = black
+        grid[N-s+2:N-2, 2:s-2] = white
 
-        # Render 5-Point Calibration Bar (Black, Red, Green, Blue, White)
-        cal_colors = [0, 4, 2, 1, 7]  # Palette indices for K, R, G, B, W
-        for i, (r, c) in enumerate(self.cal_cells[:len(cal_colors)]):
-            grid[r, c] = COLOR_PALETTE[cal_colors[i]]
+        # Calibration swatches along top border
+        if self.color_mode == MODE_3BIT_8COLOR:
+            cal_indices = [0, 4, 2, 1, 7] # K, R, G, B, W
+        elif self.color_mode == MODE_2BIT_4COLOR:
+            cal_indices = [0, 1, 2, 3]    # K, R, G, W
+        else:
+            cal_indices = [0, 1, 0, 1]    # K, W, K, W
 
-        # Render Timing Tracks
-        for r, c, col_idx in self.timing_cells:
-            grid[r, c] = COLOR_PALETTE[col_idx]
+        for i, (r, c) in enumerate(self.cal_cells[:len(cal_indices)]):
+            grid[r, c] = self.palette[cal_indices[i]]
+
+        # Timing tracks
+        for r, c, tick in self.timing_cells:
+            grid[r, c] = white if tick else black
 
 
 def bytes_to_color_grid(data: bytes, layout: ColorMatrixLayout) -> np.ndarray:
-    """
-    Encodes raw byte sequence into an (M, M, 3) RGB uint8 image grid.
-    Pads bits to full triplets so zero bits are truncated.
-    """
     grid = np.zeros((layout.grid_size, layout.grid_size, 3), dtype=np.uint8)
     layout.render_anchors(grid)
 
@@ -121,65 +146,61 @@ def bytes_to_color_grid(data: bytes, layout: ColorMatrixLayout) -> np.ndarray:
 
     byte_arr = np.frombuffer(data, dtype=np.uint8)
     bits = np.unpackbits(byte_arr)
+    bpc = layout.bits_per_cell
 
-    # Pad with zeros to multiple of 3 if needed
-    rem = len(bits) % 3
+    # Pad bits to multiple of bits_per_cell
+    rem = len(bits) % bpc
     if rem != 0:
-        pad_len = 3 - rem
-        bits = np.concatenate([bits, np.zeros(pad_len, dtype=np.uint8)])
+        bits = np.concatenate([bits, np.zeros(bpc - rem, dtype=np.uint8)])
 
-    # Reshape into triplets (3 bits per pixel)
-    triplets = bits.reshape(-1, 3)
+    chunks = bits.reshape(-1, bpc)
+    if bpc == 1:
+        color_indices = chunks[:, 0]
+    elif bpc == 2:
+        color_indices = (chunks[:, 0] << 1) | chunks[:, 1]
+    else:
+        color_indices = (chunks[:, 0] << 2) | (chunks[:, 1] << 1) | chunks[:, 2]
 
-    # Compute color indices: (b0 << 2) | (b1 << 1) | b2
-    color_indices = (triplets[:, 0] << 2) | (triplets[:, 1] << 1) | triplets[:, 2]
-
-    # Map onto data coordinates
     num_to_draw = min(len(color_indices), layout.num_data_cells)
     coords = layout.data_coords[:num_to_draw]
 
     for i in range(num_to_draw):
         r, c = coords[i]
-        grid[r, c] = COLOR_PALETTE[color_indices[i]]
+        grid[r, c] = layout.palette[color_indices[i]]
 
     return grid
 
 
-def color_grid_to_bytes(grid: np.ndarray, layout: ColorMatrixLayout, color_classifier_fn=None) -> bytes:
-    """
-    Samples cells from an (M, M, 3) image grid and decodes back into raw bytes.
-    """
+def color_grid_to_bytes(grid: np.ndarray, layout: ColorMatrixLayout, classifier_fn=None) -> bytes:
     num_cells = layout.num_data_cells
     coords = layout.data_coords
-    
-    # Extract RGB values at data cell coordinates
-    rgb_values = grid[coords[:, 0], coords[:, 1]]  # Shape: (num_cells, 3)
+    rgb_values = grid[coords[:, 0], coords[:, 1]]
+    bpc = layout.bits_per_cell
 
-    if color_classifier_fn is None:
-        # Default simple threshold classifier (midpoint 128)
-        # R > 128 -> bit 0, G > 128 -> bit 1, B > 128 -> bit 2
-        r_bit = (rgb_values[:, 0] > 128).astype(np.uint8)
-        g_bit = (rgb_values[:, 1] > 128).astype(np.uint8)
-        b_bit = (rgb_values[:, 2] > 128).astype(np.uint8)
+    if classifier_fn is not None:
+        indices = classifier_fn(rgb_values, layout.color_mode)
     else:
-        r_bit, g_bit, b_bit = color_classifier_fn(rgb_values)
+        # Default nearest palette index classifier
+        dists = np.sum((rgb_values[:, np.newaxis, :] - layout.palette[np.newaxis, :, :]) ** 2, axis=2)
+        indices = np.argmin(dists, axis=1)
 
-    # Stack bits: (num_cells, 3) -> flattened bits
-    bits = np.column_stack([r_bit, g_bit, b_bit]).flatten()
+    if bpc == 1:
+        bits = indices.astype(np.uint8)
+    elif bpc == 2:
+        b0 = ((indices >> 1) & 1).astype(np.uint8)
+        b1 = (indices & 1).astype(np.uint8)
+        bits = np.column_stack([b0, b1]).flatten()
+    else:
+        b0 = ((indices >> 2) & 1).astype(np.uint8)
+        b1 = ((indices >> 1) & 1).astype(np.uint8)
+        b2 = (indices & 1).astype(np.uint8)
+        bits = np.column_stack([b0, b1, b2]).flatten()
 
-    # Pack bits into bytes
     num_bytes = len(bits) // 8
     byte_bits = bits[:num_bytes * 8].reshape(-1, 8)
-    raw_bytes = np.packbits(byte_bits).tobytes()
-
-    return raw_bytes
+    return np.packbits(byte_bits).tobytes()
 
 
 def upscale_grid_for_display(grid: np.ndarray, target_resolution: int = 512) -> np.ndarray:
-    """
-    Upscales the (M, M, 3) matrix to target_resolution x target_resolution using nearest neighbor
-    to produce sharp, crisp visual cells on screens without blurry antialiasing.
-    """
     scale = max(1, target_resolution // grid.shape[0])
-    upscaled = np.repeat(np.repeat(grid, scale, axis=0), scale, axis=1)
-    return upscaled
+    return np.repeat(np.repeat(grid, scale, axis=0), scale, axis=1)

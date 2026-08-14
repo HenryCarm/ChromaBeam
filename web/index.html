@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ChromaBeam — High-Speed Optical File Transfer Protocol</title>
-    <meta name="description" content="Ultra-fast optical file transfer through 3-bit RGB animated matrix fountain codes across air-gapped screens and cameras.">
+    <meta name="description" content="Ultra-fast optical file transfer through multi-mode animated matrix fountain codes across air-gapped screens and cameras.">
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -39,32 +39,65 @@
 
             <!-- Right: Settings & Telemetry -->
             <div class="card">
-                <span class="card-title">Payload Configuration</span>
-                
+                <span class="card-title">1. Transmission Presets (Grandma Mode)</span>
+                <div class="preset-grid">
+                    <div id="preset_potato" class="preset-card active" onclick="applyPreset('potato')">
+                        <div class="preset-icon">🛡️</div>
+                        <div class="preset-name">Potato Camera</div>
+                        <div class="preset-sub">1-Bit B&W (Max Reliability)</div>
+                    </div>
+                    <div id="preset_balanced" class="preset-card" onclick="applyPreset('balanced')">
+                        <div class="preset-icon">⚖️</div>
+                        <div class="preset-name">Balanced</div>
+                        <div class="preset-sub">4-Color (Recommended)</div>
+                    </div>
+                    <div id="preset_turbo" class="preset-card" onclick="applyPreset('turbo')">
+                        <div class="preset-icon">⚡</div>
+                        <div class="preset-name">Turbo Speed</div>
+                        <div class="preset-sub">8-Color RGB (550 KB/s)</div>
+                    </div>
+                </div>
+
+                <span class="card-title">2. Choose Payload</span>
                 <div id="senderDropArea" class="drop-zone" onclick="document.getElementById('senderFileInput').click()">
-                    <div class="drop-title">📁 Choose a file or drop here</div>
+                    <div class="drop-title">📁 Tap to choose file or drop here</div>
                     <div class="drop-subtitle">Images, ZIPs, APKs, Audio, Documents</div>
                     <input type="file" id="senderFileInput" style="display: none;">
                 </div>
 
                 <div class="metric-box">
-                    <div id="senderFileLabel" style="font-weight: 600; word-break: break-all;">File: chromabeam_sample_128kb.bin</div>
-                    <div id="senderSizeLabel" style="font-size: 12px; color: var(--text-secondary); margin-top: 4px;">Size: 128.0 KB | Blocks K: 163 (Block: 808 B)</div>
+                    <div id="senderFileLabel" style="font-weight: 600; word-break: break-all;">File: chromabeam_sample_64kb.bin</div>
+                    <div id="senderSizeLabel" style="font-size: 12px; color: var(--text-secondary); margin-top: 4px;">Size: 64.0 KB</div>
                 </div>
 
-                <span class="card-title">Matrix Parameters</span>
-                <div class="control-row">
-                    <label for="senderGridSelect" style="font-size: 13px;">Grid Density:</label>
-                    <select id="senderGridSelect" onchange="updateSenderGridDensity(parseInt(this.value))">
-                        <option value="32">32x32 (Ultra Safe - 180 KB/s)</option>
-                        <option value="48" selected>48x48 (Balanced - 350 KB/s)</option>
-                        <option value="64">64x64 (High Speed - 550 KB/s)</option>
-                    </select>
+                <!-- Advanced Pro Settings Toggle -->
+                <div style="text-align: center;">
+                    <button id="proToggleBtn" class="btn btn-secondary" onclick="toggleProMode()" style="font-size: 12px; padding: 6px 14px;">⚙️ Advanced Settings (Pro)</button>
                 </div>
 
-                <div class="control-row">
-                    <span id="senderFpsLabel" style="font-size: 13px;">Frame Rate: 45 FPS</span>
-                    <input type="range" id="senderFpsRange" min="15" max="60" value="45" oninput="updateSenderFPS(parseInt(this.value))">
+                <div id="senderProSection" style="display: none; display: flex; flex-direction: column; gap: 12px; border-top: 1px solid var(--card-border); padding-top: 12px;">
+                    <div class="control-row">
+                        <label for="senderModeSelect" style="font-size: 13px;">Color Depth:</label>
+                        <select id="senderModeSelect" onchange="updateSenderColorMode(parseInt(this.value))">
+                            <option value="0" selected>1-bit Monochrome (Black & White)</option>
+                            <option value="1">2-bit 4-Color (K, R, G, W)</option>
+                            <option value="2">3-bit 8-Color (JAB RGB)</option>
+                        </select>
+                    </div>
+
+                    <div class="control-row">
+                        <label for="senderGridSelect" style="font-size: 13px;">Matrix Density:</label>
+                        <select id="senderGridSelect" onchange="updateSenderGridDensity(parseInt(this.value))">
+                            <option value="32" selected>32x32 (Ultra Large Cells)</option>
+                            <option value="48">48x48 (Balanced)</option>
+                            <option value="64">64x64 (High Density)</option>
+                        </select>
+                    </div>
+
+                    <div class="control-row">
+                        <span id="senderFpsLabel" style="font-size: 13px;">Frame Rate: 15 FPS</span>
+                        <input type="range" id="senderFpsRange" min="10" max="60" value="15" oninput="updateSenderFPS(parseInt(this.value))">
+                    </div>
                 </div>
 
                 <span class="card-title">Live Telemetry</span>
@@ -78,7 +111,7 @@
                         <div id="senderDropletVal" class="metric-value" style="font-size: 14px; color: #58a6ff;">Droplets: 0</div>
                     </div>
                 </div>
-                <div id="senderCycleVal" style="font-size: 12px; color: var(--text-secondary); font-family: var(--font-mono);">Stream Cycles: 0x | Degree: 1</div>
+                <div id="senderCycleVal" style="font-size: 12px; color: var(--text-secondary); font-family: var(--font-mono);">Cycles: 0x | Degree: 1</div>
             </div>
         </section>
 
@@ -109,17 +142,7 @@
                     <div id="receiverProgressLabel" class="progress-text">0%</div>
                 </div>
 
-                <span class="card-title">Receiver Settings</span>
-                <div class="control-row">
-                    <label for="receiverGridSelect" style="font-size: 13px;">Matrix Density:</label>
-                    <select id="receiverGridSelect" onchange="updateReceiverGridDensity(parseInt(this.value))">
-                        <option value="32">32x32 (Ultra Safe - 180 KB/s)</option>
-                        <option value="48">48x48 (Balanced - 350 KB/s)</option>
-                        <option value="64" selected>64x64 (High Speed - 550 KB/s)</option>
-                    </select>
-                </div>
-
-                <span class="card-title">Reception Telemetry</span>
+                <span class="card-title">Reception Telemetry (Auto-Detect Active)</span>
                 <div class="telemetry-grid">
                     <div class="metric-box">
                         <div class="metric-label">Camera Frame Rate</div>
@@ -132,11 +155,11 @@
                 </div>
 
                 <div class="metric-box" style="margin-top: 10px;">
-                    <div class="metric-label" style="margin-bottom: 6px;">Instructions for Best Transfer</div>
+                    <div class="metric-label" style="margin-bottom: 6px;">How to Scan</div>
                     <ul style="font-size: 12px; color: var(--text-secondary); padding-left: 18px; line-height: 1.6;">
-                        <li>Aim camera directly at the sender's animated screen.</li>
-                        <li>Keep the 4 corner markers inside the viewfinder box.</li>
-                        <li>The solver will auto-reconstruct the full file losslessly and download it instantly!</li>
+                        <li>Fit the flashing matrix roughly inside the green target box.</li>
+                        <li>ChromaBeam will <b>auto-detect the density and color mode</b> automatically!</li>
+                        <li>When full file is assembled, it will automatically download!</li>
                     </ul>
                 </div>
             </div>
@@ -171,7 +194,6 @@
             }
         }
 
-        // Initialize on load
         window.addEventListener('DOMContentLoaded', () => {
             initSender();
             initReceiver();

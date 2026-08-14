@@ -1,8 +1,10 @@
 """
 ChromaBeam Unified Desktop Application (PyQt6)
-All-in-One Optical Sender & Webcam Receiver for Linux, Windows, and macOS.
-Includes 60 FPS Screen Sender, Real-Time Webcam Receiver with OpenCV tracking,
-Offline HTML export, and --auto-screenshot offscreen render buffer support.
+Features:
+- Grandma Presets: 🛡️ Potato Camera (1-bit B&W), ⚖️ Balanced (2-bit 4-Color), ⚡ Turbo (3-bit 8-Color)
+- Pro Settings (Custom grid density, frame rate, color modes)
+- Optical Webcam Receiver with Auto-Density Detection & Homography Warp
+- 100% Offline Single-File HTML Export & Mobile Pairing
 """
 
 import sys
@@ -15,26 +17,25 @@ import cv2
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QSlider, QComboBox, QFileDialog, QFrame,
-    QProgressBar, QGroupBox, QTabWidget, QTextEdit
+    QProgressBar, QGroupBox, QTabWidget, QTextEdit, QRadioButton, QButtonGroup
 )
 from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal
 from PyQt6.QtGui import QImage, QPixmap, QPainter, QColor, QFont
 
-# Ensure portable relative imports (Learned Invariant)
 APP_DIR = os.path.dirname(os.path.abspath(sys.argv[0] if sys.argv[0] else __file__))
 sys.path.insert(0, APP_DIR)
 
 from core.protocol import pack_packet, unpack_packet, pack_file_metadata, unpack_file_metadata
 from core.fountain import LTEncoder, LTDecoder
-from core.color_matrix import ColorMatrixLayout, bytes_to_color_grid, color_grid_to_bytes, upscale_grid_for_display
+from core.color_matrix import (
+    ColorMatrixLayout, bytes_to_color_grid, color_grid_to_bytes, upscale_grid_for_display,
+    MODE_1BIT_BW, MODE_2BIT_4COLOR, MODE_3BIT_8COLOR
+)
 from desktop_receiver.tracker import OpticalTracker
 from desktop_receiver.color_classifier import AdaptiveColorClassifier
 
 
 class OpticalMatrixCanvas(QWidget):
-    """
-    Hardware-accelerated widget rendering the high-speed ChromaBeam matrix.
-    """
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setMinimumSize(380, 380)
@@ -60,16 +61,12 @@ class OpticalMatrixCanvas(QWidget):
 
 
 class CameraWorkerThread(QThread):
-    """
-    Background worker capturing frames from webcam and feeding to ChromaBeam receiver engine.
-    """
     frame_ready = pyqtSignal(np.ndarray, dict)
     file_received = pyqtSignal(str, int, str)
 
-    def __init__(self, cam_index=0, grid_size=48, output_dir=None):
+    def __init__(self, cam_index=0, output_dir=None):
         super().__init__()
         self.cam_index = cam_index
-        self.grid_size = grid_size
         self.output_dir = output_dir or os.path.expanduser("~/Downloads/ChromaBeam_Received")
         os.makedirs(self.output_dir, exist_ok=True)
         self.running = False
@@ -79,16 +76,22 @@ class CameraWorkerThread(QThread):
         if not cap.isOpened():
             return
 
-        layout = ColorMatrixLayout(grid_size=self.grid_size)
         tracker = OpticalTracker(target_grid_dim=512)
-        classifier = AdaptiveColorClassifier()
-
         decoder = None
         current_file_id = None
         packets_caught = 0
         crc_errors = 0
         complete = False
         self.running = True
+
+        candidate_configs = [
+            (32, MODE_1BIT_BW),
+            (64, MODE_3BIT_8COLOR),
+            (48, MODE_2BIT_4COLOR),
+            (48, MODE_3BIT_8COLOR),
+            (64, MODE_1BIT_BW)
+        ]
+        layouts = {cfg: ColorMatrixLayout(grid_size=cfg[0], color_mode=cfg[1]) for cfg in candidate_configs}
 
         while self.running:
             ret, frame = cap.read()
@@ -112,12 +115,19 @@ class CameraWorkerThread(QThread):
                     cv2.circle(frame, tuple(pt.astype(int)), 5, (0, 0, 255), -1)
 
                 warped = tracker.warp_matrix(frame, quad)
-                sampled_grid = tracker.sample_grid_cells(warped, grid_size=self.grid_size)
-                raw_bytes = color_grid_to_bytes(sampled_grid, layout)
-                packet_data = unpack_packet(raw_bytes)
 
-                if packet_data is not None:
-                    header, payload = packet_data
+                # Auto-try candidate layouts
+                decoded_packet = None
+                for cfg, layout in layouts.items():
+                    sampled_grid = tracker.sample_grid_cells(warped, grid_size=cfg[0])
+                    raw_bytes = color_grid_to_bytes(sampled_grid, layout)
+                    packet_data = unpack_packet(raw_bytes)
+                    if packet_data is not None:
+                        decoded_packet = packet_data
+                        break
+
+                if decoded_packet is not None:
+                    header, payload = decoded_packet
                     packets_caught += 1
 
                     if decoder is None or current_file_id != header.file_id:
@@ -164,10 +174,9 @@ class UnifiedChromaBeamApp(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("ChromaBeam // Ultra-Fast Optical File Transfer Suite")
-        self.resize(960, 720)
-        self.setMinimumSize(880, 640)
+        self.resize(980, 740)
+        self.setMinimumSize(900, 660)
 
-        # Global stylesheet
         self.setStyleSheet("""
             QMainWindow { background-color: #0b0f14; }
             QWidget { color: #e6edf3; font-family: 'Segoe UI', sans-serif; font-size: 13px; }
@@ -181,6 +190,9 @@ class UnifiedChromaBeamApp(QMainWindow):
             QPushButton#primary_btn { background-color: #1f6feb; border-color: #388bfd; }
             QPushButton#primary_btn:hover { background-color: #388bfd; }
             QPushButton#danger_btn { background-color: #da3633; border-color: #f85149; }
+            QPushButton#preset_btn { background-color: #161b22; border: 2px solid #30363d; text-align: left; padding: 10px; border-radius: 8px; }
+            QPushButton#preset_btn:hover { border-color: #58a6ff; }
+            QPushButton#preset_btn[active="true"] { border-color: #2ea043; background-color: rgba(46, 160, 67, 0.15); }
             QComboBox { background-color: #21262d; border: 1px solid #30363d; border-radius: 6px; padding: 6px 12px; color: #f0f6fc; }
             QSlider::groove:horizontal { height: 6px; background: #21262d; border-radius: 3px; }
             QSlider::handle:horizontal { background: #58a6ff; width: 16px; margin: -5px 0; border-radius: 8px; }
@@ -190,14 +202,15 @@ class UnifiedChromaBeamApp(QMainWindow):
         """)
 
         # Sender state
-        self.grid_size = 48
-        self.target_fps = 45
+        self.grid_size = 32
+        self.color_mode = MODE_1BIT_BW # Default to Potato Mode B&W
+        self.target_fps = 15
         self.is_streaming = False
         self.file_data = None
         self.filename = "None"
         self.filesize = 0
         self.file_id = random.randint(1000, 60000)
-        self.layout_engine = ColorMatrixLayout(grid_size=self.grid_size)
+        self.layout_engine = ColorMatrixLayout(grid_size=self.grid_size, color_mode=self.color_mode)
         self.encoder = None
         self.droplet_seed = 0
         self.total_droplets_sent = 0
@@ -206,32 +219,27 @@ class UnifiedChromaBeamApp(QMainWindow):
         # Receiver state
         self.cam_thread = None
 
-        # Build UI
         self._init_ui()
 
-        # Sender 60 FPS timer
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._on_sender_tick)
         self.timer.start(int(1000 / self.target_fps))
 
-        # Default sample payload
         self._load_demo_payload()
+        self._apply_preset('potato')
 
     def _init_ui(self):
         tabs = QTabWidget(self)
         self.setCentralWidget(tabs)
 
-        # Tab 1: Sender
         sender_widget = QWidget()
         self._build_sender_tab(sender_widget)
         tabs.addTab(sender_widget, "📡 Beam Sender (Screen)")
 
-        # Tab 2: Receiver
         receiver_widget = QWidget()
         self._build_receiver_tab(receiver_widget)
         tabs.addTab(receiver_widget, "📸 Optical Receiver (Webcam)")
 
-        # Tab 3: Offline & Mobile
         offline_widget = QWidget()
         self._build_offline_tab(offline_widget)
         tabs.addTab(offline_widget, "📱 Offline & Mobile Pairing")
@@ -241,24 +249,44 @@ class UnifiedChromaBeamApp(QMainWindow):
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(16)
 
-        # Canvas
         left = QVBoxLayout()
         self.canvas = OpticalMatrixCanvas(self)
         left.addWidget(self.canvas, stretch=1)
         layout.addLayout(left, stretch=3)
 
-        # Controls
         right = QVBoxLayout()
-        right.setSpacing(12)
+        right.setSpacing(10)
 
-        file_grp = QGroupBox("Payload Selection")
+        # 1. Grandma Presets
+        preset_grp = QGroupBox("1. Transmission Presets (Grandma Mode)")
+        pr_layout = QHBoxLayout(preset_grp)
+
+        self.btn_potato = QPushButton("🛡️ Potato Camera\n1-Bit B&W (Max Reliability)")
+        self.btn_potato.setObjectName("preset_btn")
+        self.btn_potato.clicked.connect(lambda: self._apply_preset('potato'))
+
+        self.btn_balanced = QPushButton("⚖️ Balanced\n4-Color (Recommended)")
+        self.btn_balanced.setObjectName("preset_btn")
+        self.btn_balanced.clicked.connect(lambda: self._apply_preset('balanced'))
+
+        self.btn_turbo = QPushButton("⚡ Turbo Speed\n8-Color RGB (550 KB/s)")
+        self.btn_turbo.setObjectName("preset_btn")
+        self.btn_turbo.clicked.connect(lambda: self._apply_preset('turbo'))
+
+        pr_layout.addWidget(self.btn_potato)
+        pr_layout.addWidget(self.btn_balanced)
+        pr_layout.addWidget(self.btn_turbo)
+        right.addWidget(preset_grp)
+
+        # 2. File Selection
+        file_grp = QGroupBox("2. Payload Selection")
         fl = QVBoxLayout(file_grp)
         self.file_lbl = QLabel("File: chromabeam_sample.bin")
-        self.size_lbl = QLabel("Size: 128 KB | Blocks: 168")
+        self.size_lbl = QLabel("Size: 64 KB | Blocks: 168")
         btn_row = QHBoxLayout()
         b1 = QPushButton("📁 Choose File...")
         b1.clicked.connect(self._select_file)
-        b2 = QPushButton("⚡ Load Demo 256KB")
+        b2 = QPushButton("⚡ Load Demo 64KB")
         b2.clicked.connect(self._load_demo_payload)
         btn_row.addWidget(b1)
         btn_row.addWidget(b2)
@@ -267,13 +295,22 @@ class UnifiedChromaBeamApp(QMainWindow):
         fl.addLayout(btn_row)
         right.addWidget(file_grp)
 
-        param_grp = QGroupBox("Parameters")
-        pl = QVBoxLayout(param_grp)
+        # 3. Pro Mode Accordion
+        self.pro_box = QGroupBox("⚙️ Advanced Parameters (Pro)")
+        pl = QVBoxLayout(self.pro_box)
+
+        mode_row = QHBoxLayout()
+        mode_row.addWidget(QLabel("Color Depth:"))
+        self.mode_combo = QComboBox()
+        self.mode_combo.addItems(["1-bit Monochrome (Black & White)", "2-bit 4-Color (K, R, G, W)", "3-bit 8-Color (JAB RGB)"])
+        self.mode_combo.currentIndexChanged.connect(self._on_mode_changed)
+        mode_row.addWidget(self.mode_combo)
+        pl.addLayout(mode_row)
+
         grid_row = QHBoxLayout()
         grid_row.addWidget(QLabel("Matrix Density:"))
         self.grid_combo = QComboBox()
-        self.grid_combo.addItems(["32x32 (180 KB/s)", "48x48 (350 KB/s)", "64x64 (550 KB/s)"])
-        self.grid_combo.setCurrentIndex(1)
+        self.grid_combo.addItems(["32x32 (Ultra Large)", "48x48 (Balanced)", "64x64 (High Density)"])
         self.grid_combo.currentIndexChanged.connect(self._on_grid_changed)
         grid_row.addWidget(self.grid_combo)
         pl.addLayout(grid_row)
@@ -281,14 +318,15 @@ class UnifiedChromaBeamApp(QMainWindow):
         fps_row = QHBoxLayout()
         self.fps_lbl = QLabel(f"FPS: {self.target_fps}")
         self.fps_slider = QSlider(Qt.Orientation.Horizontal)
-        self.fps_slider.setRange(15, 60)
+        self.fps_slider.setRange(10, 60)
         self.fps_slider.setValue(self.target_fps)
         self.fps_slider.valueChanged.connect(self._on_fps_changed)
         fps_row.addWidget(self.fps_lbl)
         fps_row.addWidget(self.fps_slider)
         pl.addLayout(fps_row)
-        right.addWidget(param_grp)
+        right.addWidget(self.pro_box)
 
+        # 4. Telemetry
         stat_grp = QGroupBox("Live Telemetry")
         sl = QVBoxLayout(stat_grp)
         self.rate_lbl = QLabel("0.0 KB/s")
@@ -309,29 +347,68 @@ class UnifiedChromaBeamApp(QMainWindow):
         right.addStretch()
         layout.addLayout(right, stretch=2)
 
+    def _apply_preset(self, preset):
+        for btn in [self.btn_potato, self.btn_balanced, self.btn_turbo]:
+            btn.setProperty("active", "false")
+
+        if preset == 'potato':
+            self.btn_potato.setProperty("active", "true")
+            self.color_mode = MODE_1BIT_BW
+            self.grid_size = 32
+            self.target_fps = 15
+        elif preset == 'balanced':
+            self.btn_balanced.setProperty("active", "true")
+            self.color_mode = MODE_2BIT_4COLOR
+            self.grid_size = 48
+            self.target_fps = 25
+        elif preset == 'turbo':
+            self.btn_turbo.setProperty("active", "true")
+            self.color_mode = MODE_3BIT_8COLOR
+            self.grid_size = 64
+            self.target_fps = 45
+
+        for btn in [self.btn_potato, self.btn_balanced, self.btn_turbo]:
+            btn.style().unpolish(btn)
+            btn.style().polish(btn)
+
+        # Sync Pro controls
+        self.mode_combo.blockSignals(True)
+        self.mode_combo.setCurrentIndex(self.color_mode)
+        self.mode_combo.blockSignals(False)
+
+        self.grid_combo.blockSignals(True)
+        self.grid_combo.setCurrentIndex(0 if self.grid_size == 32 else (1 if self.grid_size == 48 else 2))
+        self.grid_combo.blockSignals(False)
+
+        self.fps_slider.setValue(self.target_fps)
+        self.fps_lbl.setText(f"FPS: {self.target_fps}")
+        self.timer.setInterval(int(1000 / self.target_fps))
+
+        self.layout_engine = ColorMatrixLayout(grid_size=self.grid_size, color_mode=self.color_mode)
+        if self.file_data:
+            self._set_payload(self.file_data, self.filename)
+
     def _build_receiver_tab(self, parent):
         layout = QHBoxLayout(parent)
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(16)
 
-        # Camera Viewfinder
         left = QVBoxLayout()
         self.cam_view = QLabel()
         self.cam_view.setMinimumSize(420, 360)
         self.cam_view.setStyleSheet("background: #000000; border: 1px solid #30363d; border-radius: 8px;")
         self.cam_view.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.cam_view.setText("Camera Feed Offline\nClick 'Start Camera' below")
+        self.cam_view.setText("Webcam Scanner Offline\nClick 'Start Scanner' below")
         left.addWidget(self.cam_view, stretch=1)
         layout.addLayout(left, stretch=3)
 
-        # Receiver Controls
         right = QVBoxLayout()
         right.setSpacing(12)
 
-        ctrl_grp = QGroupBox("Webcam Setup")
+        ctrl_grp = QGroupBox("Webcam Setup (Auto-Detect Active)")
         cl = QVBoxLayout(ctrl_grp)
         cam_row = QHBoxLayout()
-        cam_row.addWidget(QLabel("Device:"))
+        cam_row.addWidget(QLabel("Camera Device:"))
         self.cam_combo = QComboBox()
         self.cam_combo.addItems(["Camera Index 0 (Default)", "Camera Index 1", "Camera Index 2"])
         cam_row.addWidget(self.cam_combo)
@@ -343,7 +420,7 @@ class UnifiedChromaBeamApp(QMainWindow):
         cl.addWidget(self.cam_btn)
         right.addWidget(ctrl_grp)
 
-        prog_grp = QGroupBox("Fountain Solver")
+        prog_grp = QGroupBox("Fountain Solver Progress")
         prl = QVBoxLayout(prog_grp)
         self.rx_progress = QProgressBar()
         self.rx_progress.setValue(0)
@@ -401,8 +478,8 @@ class UnifiedChromaBeamApp(QMainWindow):
             self._set_payload(data, os.path.basename(path))
 
     def _load_demo_payload(self):
-        data = b"ChromaBeam-HighSpeedOpticalPayload\n" + (os.urandom(128 * 1024))
-        self._set_payload(data, "chromabeam_demo_sample.bin")
+        data = b"ChromaBeam-HighSpeedOpticalPayload\n" + (os.urandom(64 * 1024))
+        self._set_payload(data, "chromabeam_demo_64kb.bin")
 
     def _set_payload(self, data: bytes, name: str):
         self.file_data = data
@@ -410,7 +487,7 @@ class UnifiedChromaBeamApp(QMainWindow):
         self.filesize = len(data)
         self.file_id = random.randint(1000, 60000)
 
-        block_size = max(32, self.layout_engine.max_payload_bytes - 16)
+        block_size = max(24, self.layout_engine.max_payload_bytes - 16)
         meta_bytes = pack_file_metadata(self.filename, self.filesize)
         full_stream_payload = meta_bytes + self.file_data
 
@@ -419,12 +496,18 @@ class UnifiedChromaBeamApp(QMainWindow):
         self.total_droplets_sent = 0
 
         self.file_lbl.setText(f"File: {self.filename}")
-        self.size_lbl.setText(f"Size: {self.filesize / 1024:.1f} KB | Total Blocks K: {self.encoder.K} (Block: {block_size} B)")
+        self.size_lbl.setText(f"Size: {self.filesize / 1024:.1f} KB | Blocks K: {self.encoder.K} (Block: {block_size} B)")
+
+    def _on_mode_changed(self, index: int):
+        self.color_mode = index
+        self.layout_engine = ColorMatrixLayout(grid_size=self.grid_size, color_mode=self.color_mode)
+        if self.file_data:
+            self._set_payload(self.file_data, self.filename)
 
     def _on_grid_changed(self, index: int):
         sizes = [32, 48, 64]
         self.grid_size = sizes[index]
-        self.layout_engine = ColorMatrixLayout(grid_size=self.grid_size)
+        self.layout_engine = ColorMatrixLayout(grid_size=self.grid_size, color_mode=self.color_mode)
         if self.file_data:
             self._set_payload(self.file_data, self.filename)
 
@@ -485,7 +568,7 @@ class UnifiedChromaBeamApp(QMainWindow):
             self.rx_status.setText("Status: Offline")
         else:
             cam_idx = self.cam_combo.currentIndex()
-            self.cam_thread = CameraWorkerThread(cam_index=cam_idx, grid_size=self.grid_size)
+            self.cam_thread = CameraWorkerThread(cam_index=cam_idx)
             self.cam_thread.frame_ready.connect(self._on_cam_frame)
             self.cam_thread.file_received.connect(self._on_file_received)
             self.cam_thread.start()
@@ -497,7 +580,6 @@ class UnifiedChromaBeamApp(QMainWindow):
         self.cam_btn.style().polish(self.cam_btn)
 
     def _on_cam_frame(self, frame: np.ndarray, stats: dict):
-        # Convert BGR -> RGB for display
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         h, w, ch = rgb_frame.shape
         qimg = QImage(rgb_frame.data, w, h, ch * w, QImage.Format.Format_RGB888)

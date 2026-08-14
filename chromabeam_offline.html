@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ChromaBeam — High-Speed Optical File Transfer Protocol</title>
-    <meta name="description" content="Ultra-fast optical file transfer through 3-bit RGB animated matrix fountain codes across air-gapped screens and cameras.">
+    <meta name="description" content="Ultra-fast optical file transfer through multi-mode animated matrix fountain codes across air-gapped screens and cameras.">
     <style>
 /* ChromaBeam Web & Mobile Stylesheet */
 :root {
@@ -176,6 +176,49 @@ main {
     object-fit: cover;
 }
 
+/* Grandma Preset Cards */
+.preset-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 10px;
+}
+
+.preset-card {
+    background: #090d12;
+    border: 2px solid var(--card-border);
+    border-radius: 8px;
+    padding: 12px 8px;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.preset-card:hover {
+    border-color: var(--accent-blue);
+}
+
+.preset-card.active {
+    border-color: var(--accent-green-hover);
+    background: rgba(46, 160, 67, 0.1);
+}
+
+.preset-icon {
+    font-size: 22px;
+    margin-bottom: 4px;
+}
+
+.preset-name {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+.preset-sub {
+    font-size: 10px;
+    color: var(--text-secondary);
+    margin-top: 2px;
+}
+
 /* Form Controls & Buttons */
 .btn {
     display: inline-flex;
@@ -242,7 +285,7 @@ main {
 .drop-zone {
     border: 2px dashed #30363d;
     border-radius: 8px;
-    padding: 24px 16px;
+    padding: 20px 16px;
     text-align: center;
     cursor: pointer;
     transition: border-color 0.2s ease;
@@ -255,11 +298,11 @@ main {
 
 .drop-title {
     font-weight: 600;
-    margin-bottom: 4px;
+    margin-bottom: 2px;
 }
 
 .drop-subtitle {
-    font-size: 12px;
+    font-size: 11px;
     color: var(--text-secondary);
 }
 
@@ -342,29 +385,10 @@ select, input[type="range"] {
 }
 
 /* Badges */
-.badge-idle {
-    color: var(--text-secondary);
-    font-size: 12px;
-    font-weight: 600;
-}
-
-.badge-scanning {
-    color: #f0883e;
-    font-size: 12px;
-    font-weight: 600;
-}
-
-.badge-locked {
-    color: var(--accent-green-hover);
-    font-size: 12px;
-    font-weight: 600;
-}
-
-.badge-complete {
-    color: #58a6ff;
-    font-size: 12px;
-    font-weight: 700;
-}
+.badge-idle { color: var(--text-secondary); font-size: 12px; font-weight: 600; }
+.badge-scanning { color: #f0883e; font-size: 12px; font-weight: 600; }
+.badge-locked { color: var(--accent-green-hover); font-size: 12px; font-weight: 600; }
+.badge-complete { color: #58a6ff; font-size: 12px; font-weight: 700; }
 
 </style>
 </head>
@@ -400,32 +424,65 @@ select, input[type="range"] {
 
             <!-- Right: Settings & Telemetry -->
             <div class="card">
-                <span class="card-title">Payload Configuration</span>
-                
+                <span class="card-title">1. Transmission Presets (Grandma Mode)</span>
+                <div class="preset-grid">
+                    <div id="preset_potato" class="preset-card active" onclick="applyPreset('potato')">
+                        <div class="preset-icon">🛡️</div>
+                        <div class="preset-name">Potato Camera</div>
+                        <div class="preset-sub">1-Bit B&W (Max Reliability)</div>
+                    </div>
+                    <div id="preset_balanced" class="preset-card" onclick="applyPreset('balanced')">
+                        <div class="preset-icon">⚖️</div>
+                        <div class="preset-name">Balanced</div>
+                        <div class="preset-sub">4-Color (Recommended)</div>
+                    </div>
+                    <div id="preset_turbo" class="preset-card" onclick="applyPreset('turbo')">
+                        <div class="preset-icon">⚡</div>
+                        <div class="preset-name">Turbo Speed</div>
+                        <div class="preset-sub">8-Color RGB (550 KB/s)</div>
+                    </div>
+                </div>
+
+                <span class="card-title">2. Choose Payload</span>
                 <div id="senderDropArea" class="drop-zone" onclick="document.getElementById('senderFileInput').click()">
-                    <div class="drop-title">📁 Choose a file or drop here</div>
+                    <div class="drop-title">📁 Tap to choose file or drop here</div>
                     <div class="drop-subtitle">Images, ZIPs, APKs, Audio, Documents</div>
                     <input type="file" id="senderFileInput" style="display: none;">
                 </div>
 
                 <div class="metric-box">
-                    <div id="senderFileLabel" style="font-weight: 600; word-break: break-all;">File: chromabeam_sample_128kb.bin</div>
-                    <div id="senderSizeLabel" style="font-size: 12px; color: var(--text-secondary); margin-top: 4px;">Size: 128.0 KB | Blocks K: 163 (Block: 808 B)</div>
+                    <div id="senderFileLabel" style="font-weight: 600; word-break: break-all;">File: chromabeam_sample_64kb.bin</div>
+                    <div id="senderSizeLabel" style="font-size: 12px; color: var(--text-secondary); margin-top: 4px;">Size: 64.0 KB</div>
                 </div>
 
-                <span class="card-title">Matrix Parameters</span>
-                <div class="control-row">
-                    <label for="senderGridSelect" style="font-size: 13px;">Grid Density:</label>
-                    <select id="senderGridSelect" onchange="updateSenderGridDensity(parseInt(this.value))">
-                        <option value="32">32x32 (Ultra Safe - 180 KB/s)</option>
-                        <option value="48" selected>48x48 (Balanced - 350 KB/s)</option>
-                        <option value="64">64x64 (High Speed - 550 KB/s)</option>
-                    </select>
+                <!-- Advanced Pro Settings Toggle -->
+                <div style="text-align: center;">
+                    <button id="proToggleBtn" class="btn btn-secondary" onclick="toggleProMode()" style="font-size: 12px; padding: 6px 14px;">⚙️ Advanced Settings (Pro)</button>
                 </div>
 
-                <div class="control-row">
-                    <span id="senderFpsLabel" style="font-size: 13px;">Frame Rate: 45 FPS</span>
-                    <input type="range" id="senderFpsRange" min="15" max="60" value="45" oninput="updateSenderFPS(parseInt(this.value))">
+                <div id="senderProSection" style="display: none; display: flex; flex-direction: column; gap: 12px; border-top: 1px solid var(--card-border); padding-top: 12px;">
+                    <div class="control-row">
+                        <label for="senderModeSelect" style="font-size: 13px;">Color Depth:</label>
+                        <select id="senderModeSelect" onchange="updateSenderColorMode(parseInt(this.value))">
+                            <option value="0" selected>1-bit Monochrome (Black & White)</option>
+                            <option value="1">2-bit 4-Color (K, R, G, W)</option>
+                            <option value="2">3-bit 8-Color (JAB RGB)</option>
+                        </select>
+                    </div>
+
+                    <div class="control-row">
+                        <label for="senderGridSelect" style="font-size: 13px;">Matrix Density:</label>
+                        <select id="senderGridSelect" onchange="updateSenderGridDensity(parseInt(this.value))">
+                            <option value="32" selected>32x32 (Ultra Large Cells)</option>
+                            <option value="48">48x48 (Balanced)</option>
+                            <option value="64">64x64 (High Density)</option>
+                        </select>
+                    </div>
+
+                    <div class="control-row">
+                        <span id="senderFpsLabel" style="font-size: 13px;">Frame Rate: 15 FPS</span>
+                        <input type="range" id="senderFpsRange" min="10" max="60" value="15" oninput="updateSenderFPS(parseInt(this.value))">
+                    </div>
                 </div>
 
                 <span class="card-title">Live Telemetry</span>
@@ -439,7 +496,7 @@ select, input[type="range"] {
                         <div id="senderDropletVal" class="metric-value" style="font-size: 14px; color: #58a6ff;">Droplets: 0</div>
                     </div>
                 </div>
-                <div id="senderCycleVal" style="font-size: 12px; color: var(--text-secondary); font-family: var(--font-mono);">Stream Cycles: 0x | Degree: 1</div>
+                <div id="senderCycleVal" style="font-size: 12px; color: var(--text-secondary); font-family: var(--font-mono);">Cycles: 0x | Degree: 1</div>
             </div>
         </section>
 
@@ -470,17 +527,7 @@ select, input[type="range"] {
                     <div id="receiverProgressLabel" class="progress-text">0%</div>
                 </div>
 
-                <span class="card-title">Receiver Settings</span>
-                <div class="control-row">
-                    <label for="receiverGridSelect" style="font-size: 13px;">Matrix Density:</label>
-                    <select id="receiverGridSelect" onchange="updateReceiverGridDensity(parseInt(this.value))">
-                        <option value="32">32x32 (Ultra Safe - 180 KB/s)</option>
-                        <option value="48">48x48 (Balanced - 350 KB/s)</option>
-                        <option value="64" selected>64x64 (High Speed - 550 KB/s)</option>
-                    </select>
-                </div>
-
-                <span class="card-title">Reception Telemetry</span>
+                <span class="card-title">Reception Telemetry (Auto-Detect Active)</span>
                 <div class="telemetry-grid">
                     <div class="metric-box">
                         <div class="metric-label">Camera Frame Rate</div>
@@ -493,11 +540,11 @@ select, input[type="range"] {
                 </div>
 
                 <div class="metric-box" style="margin-top: 10px;">
-                    <div class="metric-label" style="margin-bottom: 6px;">Instructions for Best Transfer</div>
+                    <div class="metric-label" style="margin-bottom: 6px;">How to Scan</div>
                     <ul style="font-size: 12px; color: var(--text-secondary); padding-left: 18px; line-height: 1.6;">
-                        <li>Aim camera directly at the sender's animated screen.</li>
-                        <li>Keep the 4 corner markers inside the viewfinder box.</li>
-                        <li>The solver will auto-reconstruct the full file losslessly and download it instantly!</li>
+                        <li>Fit the flashing matrix roughly inside the green target box.</li>
+                        <li>ChromaBeam will <b>auto-detect the density and color mode</b> automatically!</li>
+                        <li>When full file is assembled, it will automatically download!</li>
                     </ul>
                 </div>
             </div>
@@ -532,7 +579,6 @@ select, input[type="range"] {
             }
         }
 
-        // Initialize on load
         window.addEventListener('DOMContentLoaded', () => {
             initSender();
             initReceiver();
@@ -881,26 +927,28 @@ function unpackFileMetadata(uint8Array) {
 
 /* --- matrix.js --- */
 /**
- * ChromaBeam JavaScript Optical Color Matrix Engine
+ * ChromaBeam Multi-Mode Optical Matrix Engine (JS)
  */
 
-const JS_COLOR_PALETTE = [
-    [0,   0,   0],    // 000: Black
-    [0,   0,   255],  // 001: Blue
-    [0,   255, 0],    // 010: Green
-    [0,   255, 255],  // 011: Cyan
-    [255, 0,   0],    // 100: Red
-    [255, 0,   255],  // 101: Magenta
-    [255, 255, 0],    // 110: Yellow
-    [255, 255, 255]   // 111: White
-];
+const PALETTES = {
+    0: [ [0, 0, 0], [255, 255, 255] ], // 1-bit B&W
+    1: [ [0, 0, 0], [255, 50, 50], [50, 255, 50], [255, 255, 255] ], // 2-bit 4-Color
+    2: [ // 3-bit 8-Color RGB
+        [0, 0, 0], [0, 0, 255], [0, 255, 0], [0, 255, 255],
+        [255, 0, 0], [255, 0, 255], [255, 255, 0], [255, 255, 255]
+    ]
+};
 
 const JS_ANCHOR_SIZE = 5;
 
 class JSColorMatrixLayout {
-    constructor(gridSize = 48) {
+    constructor(gridSize = 48, colorMode = 2) {
         this.gridSize = gridSize;
+        this.colorMode = colorMode;
         this.anchorSize = JS_ANCHOR_SIZE;
+        this.palette = PALETTES[colorMode] || PALETTES[2];
+        this.bitsPerCell = (colorMode === 0) ? 1 : (colorMode === 1 ? 2 : 3);
+
         this.dataCoords = [];
         this.calCells = [];
         this.timingCells = [];
@@ -915,13 +963,11 @@ class JSColorMatrixLayout {
         }
 
         // 2. Timing tracks
-        // Top timing track (rest of top row)
         for (let c = calEnd; c < N - s; c++) {
-            this.timingCells.push({ r: 0, c, colorIdx: (c % 2) * 7 });
+            this.timingCells.push({ r: 0, c, colorIdx: (c % 2) ? (this.palette.length - 1) : 0 });
         }
-        // Bottom timing track
         for (let c = s; c < N - s; c++) {
-            this.timingCells.push({ r: N - 1, c, colorIdx: (c % 2) * 7 });
+            this.timingCells.push({ r: N - 1, c, colorIdx: (c % 2) ? (this.palette.length - 1) : 0 });
         }
 
         // 3. Data cells
@@ -941,43 +987,45 @@ class JSColorMatrixLayout {
         }
 
         this.numDataCells = this.dataCoords.length;
-        this.maxPayloadBits = this.numDataCells * 3;
+        this.maxPayloadBits = this.numDataCells * this.bitsPerCell;
         this.maxPayloadBytes = Math.floor(this.maxPayloadBits / 8);
     }
 
     renderAnchors(grid2D) {
         const s = this.anchorSize;
         const N = this.gridSize;
+        const white = this.palette.length - 1;
+        const black = 0;
 
-        // TL: Concentric
-        for (let r = 0; r < s; r++) for (let c = 0; c < s; c++) grid2D[r][c] = 7; // White
-        for (let r = 1; r < s - 1; r++) for (let c = 1; c < s - 1; c++) grid2D[r][c] = 0; // Black
-        for (let r = 2; r < s - 2; r++) for (let c = 2; c < s - 2; c++) grid2D[r][c] = 7; // Center dot
+        // 1:1:1:1:1 Concentric square anchors
+        // TL
+        for (let r = 0; r < s; r++) for (let c = 0; c < s; c++) grid2D[r][c] = white;
+        for (let r = 1; r < s - 1; r++) for (let c = 1; c < s - 1; c++) grid2D[r][c] = black;
+        grid2D[2][2] = white;
 
-        // TR: White box with inner notch
-        for (let r = 0; r < s; r++) for (let c = N - s; c < N; c++) grid2D[r][c] = 7;
-        for (let r = 1; r < s - 1; r++) for (let c = N - s + 1; c < N - 1; c++) grid2D[r][c] = 0;
-        grid2D[1][N - 2] = 7;
+        // TR
+        for (let r = 0; r < s; r++) for (let c = N - s; c < N; c++) grid2D[r][c] = white;
+        for (let r = 1; r < s - 1; r++) for (let c = N - s + 1; c < N - 1; c++) grid2D[r][c] = black;
+        grid2D[2][N - 3] = (this.palette.length > 4) ? 4 : white; // Red dot if 8-color
 
-        // BR: Concentric with Red target
-        for (let r = N - s; r < N; r++) for (let c = N - s; c < N; c++) grid2D[r][c] = 7;
-        for (let r = N - s + 1; r < N - 1; r++) for (let c = N - s + 1; c < N - 1; c++) grid2D[r][c] = 0;
-        for (let r = N - s + 2; r < N - 2; r++) for (let c = N - s + 2; c < N - 2; c++) grid2D[r][c] = 4; // Red center
+        // BR
+        for (let r = N - s; r < N; r++) for (let c = N - s; c < N; c++) grid2D[r][c] = white;
+        for (let r = N - s + 1; r < N - 1; r++) for (let c = N - s + 1; c < N - 1; c++) grid2D[r][c] = black;
+        grid2D[N - 3][N - 3] = (this.palette.length > 2) ? 2 : white; // Green dot
 
-        // BL: Crosshair
-        for (let r = N - s; r < N; r++) for (let c = 0; c < s; c++) grid2D[r][c] = 7;
-        for (let r = N - s + 1; r < N - 1; r++) for (let c = 1; c < s - 1; c++) grid2D[r][c] = 0;
-        for (let r = N - s + 2; r < N - 2; r++) for (let c = 1; c < s - 1; c++) grid2D[r][c] = 7;
-        for (let r = N - s + 1; r < N - 1; r++) for (let c = 2; c < s - 2; c++) grid2D[r][c] = 7;
+        // BL
+        for (let r = N - s; r < N; r++) for (let c = 0; c < s; c++) grid2D[r][c] = white;
+        for (let r = N - s + 1; r < N - 1; r++) for (let c = 1; c < s - 1; c++) grid2D[r][c] = black;
+        grid2D[N - 3][2] = white;
 
-        // Calibration Bar: K, R, G, B, W
-        const calColors = [0, 4, 2, 1, 7];
-        for (let i = 0; i < Math.min(this.calCells.length, calColors.length); i++) {
+        // Calibration swatches
+        let calIdxs = (this.colorMode === 2) ? [0, 4, 2, 1, 7] : ((this.colorMode === 1) ? [0, 1, 2, 3] : [0, 1, 0, 1]);
+        for (let i = 0; i < Math.min(this.calCells.length, calIdxs.length); i++) {
             const { r, c } = this.calCells[i];
-            grid2D[r][c] = calColors[i];
+            grid2D[r][c] = Math.min(calIdxs[i], this.palette.length - 1);
         }
 
-        // Timing Tracks
+        // Timing tracks
         for (const { r, c, colorIdx } of this.timingCells) {
             grid2D[r][c] = colorIdx;
         }
@@ -989,26 +1037,27 @@ function bytesToGridIndices(uint8Data, layout) {
     const grid2D = Array.from({ length: N }, () => new Uint8Array(N));
     layout.renderAnchors(grid2D);
 
-    // Unpack bits from bytes
     const bits = [];
     for (let i = 0; i < uint8Data.length; i++) {
         const b = uint8Data[i];
-        for (let k = 7; k >= 0; k--) {
-            bits.push((b >> k) & 1);
-        }
+        for (let k = 7; k >= 0; k--) bits.push((b >> k) & 1);
     }
 
-    // Pad to multiple of 3
-    while (bits.length % 3 !== 0) bits.push(0);
+    const bpc = layout.bitsPerCell;
+    while (bits.length % bpc !== 0) bits.push(0);
 
-    const numTriplets = Math.floor(bits.length / 3);
-    const numToDraw = Math.min(numTriplets, layout.numDataCells);
+    const numChunks = Math.floor(bits.length / bpc);
+    const numToDraw = Math.min(numChunks, layout.numDataCells);
 
     for (let i = 0; i < numToDraw; i++) {
-        const b0 = bits[i * 3];
-        const b1 = bits[i * 3 + 1];
-        const b2 = bits[i * 3 + 2];
-        const colorIdx = (b0 << 2) | (b1 << 1) | b2;
+        let colorIdx = 0;
+        if (bpc === 1) {
+            colorIdx = bits[i];
+        } else if (bpc === 2) {
+            colorIdx = (bits[i * 2] << 1) | bits[i * 2 + 1];
+        } else {
+            colorIdx = (bits[i * 3] << 2) | (bits[i * 3 + 1] << 1) | bits[i * 3 + 2];
+        }
         const { r, c } = layout.dataCoords[i];
         grid2D[r][c] = colorIdx;
     }
@@ -1016,15 +1065,23 @@ function bytesToGridIndices(uint8Data, layout) {
     return grid2D;
 }
 
-function gridIndicesToBytes(grid2D, layout, rgbThreshold = 128) {
+function gridIndicesToBytes(grid2D, layout) {
     const bits = [];
+    const bpc = layout.bitsPerCell;
+
     for (let i = 0; i < layout.numDataCells; i++) {
         const { r, c } = layout.dataCoords[i];
         const colorIdx = grid2D[r][c];
-        // 3 bits
-        bits.push((colorIdx >> 2) & 1);
-        bits.push((colorIdx >> 1) & 1);
-        bits.push(colorIdx & 1);
+        if (bpc === 1) {
+            bits.push(colorIdx & 1);
+        } else if (bpc === 2) {
+            bits.push((colorIdx >> 1) & 1);
+            bits.push(colorIdx & 1);
+        } else {
+            bits.push((colorIdx >> 2) & 1);
+            bits.push((colorIdx >> 1) & 1);
+            bits.push(colorIdx & 1);
+        }
     }
 
     const numBytes = Math.floor(bits.length / 8);
@@ -1042,10 +1099,12 @@ function gridIndicesToBytes(grid2D, layout, rgbThreshold = 128) {
 
 /* --- sender.js --- */
 /**
- * ChromaBeam Web Sender Engine
+ * ChromaBeam Web Sender Engine with Grandma Presets & Multi-Mode Support
  */
 
-let senderLayout = new JSColorMatrixLayout(48);
+let senderGridSize = 32;
+let senderColorMode = 0; // Default to Potato Mode (0: B&W) for instant bulletproof compatibility!
+let senderLayout = new JSColorMatrixLayout(senderGridSize, senderColorMode);
 let senderEncoder = null;
 let senderFileBytes = null;
 let senderFilename = "demo_sample.bin";
@@ -1054,7 +1113,7 @@ let senderDropletSeed = 0;
 let senderTotalSent = 0;
 let senderStartTime = 0;
 let senderIsStreaming = false;
-let senderTargetFPS = 45;
+let senderTargetFPS = 15;
 let senderAnimationHandle = null;
 let senderLastFrameTime = 0;
 
@@ -1064,15 +1123,65 @@ const senderCtx = senderCanvas ? senderCanvas.getContext('2d', { alpha: false })
 function initSender() {
     setupDragAndDrop();
     loadDemoSenderPayload();
+    applyPreset('potato'); // Start with Potato Mode for 100% immediate out-of-the-box reliability!
     renderIdleSenderFrame();
 }
 
+function applyPreset(presetName) {
+    document.querySelectorAll('.preset-card').forEach(c => c.classList.remove('active'));
+    const card = document.getElementById(`preset_${presetName}`);
+    if (card) card.classList.add('active');
+
+    if (presetName === 'potato') {
+        // Potato Camera: 1-bit Monochrome B&W, 32x32, 15 FPS
+        senderColorMode = 0;
+        senderGridSize = 32;
+        senderTargetFPS = 15;
+    } else if (presetName === 'balanced') {
+        // Balanced: 2-bit 4-Color, 48x48, 25 FPS
+        senderColorMode = 1;
+        senderGridSize = 48;
+        senderTargetFPS = 25;
+    } else if (presetName === 'turbo') {
+        // Turbo Speed: 3-bit 8-Color, 64x64, 45 FPS
+        senderColorMode = 2;
+        senderGridSize = 64;
+        senderTargetFPS = 45;
+    }
+
+    // Sync Pro Mode controls
+    const gridSel = document.getElementById('senderGridSelect');
+    if (gridSel) gridSel.value = senderGridSize;
+    const modeSel = document.getElementById('senderModeSelect');
+    if (modeSel) modeSel.value = senderColorMode;
+    const fpsRng = document.getElementById('senderFpsRange');
+    if (fpsRng) {
+        fpsRng.value = senderTargetFPS;
+        document.getElementById('senderFpsLabel').textContent = `Frame Rate: ${senderTargetFPS} FPS`;
+    }
+
+    senderLayout = new JSColorMatrixLayout(senderGridSize, senderColorMode);
+    if (senderFileBytes) {
+        setSenderPayload(senderFileBytes, senderFilename);
+    } else {
+        renderIdleSenderFrame();
+    }
+}
+
+function toggleProMode() {
+    const proSection = document.getElementById('senderProSection');
+    if (proSection) {
+        const isHidden = proSection.style.display === 'none';
+        proSection.style.display = isHidden ? 'block' : 'none';
+        document.getElementById('proToggleBtn').textContent = isHidden ? "▲ Hide Advanced Settings" : "⚙️ Advanced Settings (Pro)";
+    }
+}
+
 function loadDemoSenderPayload() {
-    // Generate synthetic 128KB payload
-    const demoSize = 128 * 1024;
+    const demoSize = 64 * 1024;
     const buf = new Uint8Array(demoSize);
     for (let i = 0; i < demoSize; i++) buf[i] = (i * 37) & 0xFF;
-    setSenderPayload(buf, "chromabeam_sample_128kb.bin");
+    setSenderPayload(buf, "chromabeam_sample_64kb.bin");
 }
 
 function setSenderPayload(uint8Bytes, filename) {
@@ -1085,13 +1194,15 @@ function setSenderPayload(uint8Bytes, filename) {
     fullPayload.set(metaBytes, 0);
     fullPayload.set(senderFileBytes, metaBytes.length);
 
-    const blockSize = Math.max(32, senderLayout.maxPayloadBytes - 16);
+    const blockSize = Math.max(24, senderLayout.maxPayloadBytes - 16);
     senderEncoder = new LTEncoder(fullPayload, blockSize);
     senderDropletSeed = 0;
     senderTotalSent = 0;
 
-    document.getElementById('senderFileLabel').textContent = `File: ${senderFilename}`;
-    document.getElementById('senderSizeLabel').textContent = `Size: ${(senderFileBytes.length / 1024).toFixed(1)} KB | Blocks K: ${senderEncoder.K} (Block: ${blockSize} B)`;
+    const fLbl = document.getElementById('senderFileLabel');
+    if (fLbl) fLbl.textContent = `File: ${senderFilename}`;
+    const sLbl = document.getElementById('senderSizeLabel');
+    if (sLbl) sLbl.textContent = `Size: ${(senderFileBytes.length / 1024).toFixed(1)} KB | Blocks K: ${senderEncoder.K} (Block: ${blockSize} B)`;
 }
 
 function renderIdleSenderFrame() {
@@ -1105,6 +1216,7 @@ function drawGridToCanvas(grid2D) {
     const N = senderLayout.gridSize;
     const size = senderCanvas.width;
     const cellSize = size / N;
+    const palette = senderLayout.palette;
 
     senderCtx.fillStyle = '#000000';
     senderCtx.fillRect(0, 0, size, size);
@@ -1112,9 +1224,8 @@ function drawGridToCanvas(grid2D) {
     for (let r = 0; r < N; r++) {
         for (let c = 0; c < N; c++) {
             const colorIdx = grid2D[r][c];
-            const [red, green, blue] = JS_COLOR_PALETTE[colorIdx];
+            const [red, green, blue] = palette[colorIdx] || [0, 0, 0];
             senderCtx.fillStyle = `rgb(${red}, ${green}, ${blue})`;
-            // Fill exact pixel cell (crisp integer bounds)
             senderCtx.fillRect(Math.floor(c * cellSize), Math.floor(r * cellSize), Math.ceil(cellSize), Math.ceil(cellSize));
         }
     }
@@ -1157,7 +1268,6 @@ function animateSenderStream(currentTime) {
             const grid2D = bytesToGridIndices(packet, senderLayout);
             drawGridToCanvas(grid2D);
 
-            // Update telemetry
             const elapsed = Math.max(0.001, (performance.now() - senderStartTime) / 1000.0);
             const kbSent = (senderTotalSent * packet.length) / 1024.0;
             const rate = kbSent / elapsed;
@@ -1165,7 +1275,7 @@ function animateSenderStream(currentTime) {
 
             document.getElementById('senderRateVal').textContent = `${rate.toFixed(1)} KB/s`;
             document.getElementById('senderDropletVal').textContent = `Droplets: ${senderTotalSent} (Seed #${seed})`;
-            document.getElementById('senderCycleVal').textContent = `Stream Cycles: ${cycles}x | Degree: ${degree}`;
+            document.getElementById('senderCycleVal').textContent = `Cycles: ${cycles}x | Degree: ${degree}`;
         }
     }
 
@@ -1175,7 +1285,6 @@ function animateSenderStream(currentTime) {
 function setupDragAndDrop() {
     const dropArea = document.getElementById('senderDropArea');
     const fileInput = document.getElementById('senderFileInput');
-
     if (!dropArea || !fileInput) return;
 
     ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
@@ -1214,12 +1323,17 @@ function handleSelectedFile(file) {
 }
 
 function updateSenderGridDensity(size) {
-    senderLayout = new JSColorMatrixLayout(size);
-    if (senderFileBytes) {
-        setSenderPayload(senderFileBytes, senderFilename);
-    } else {
-        renderIdleSenderFrame();
-    }
+    senderGridSize = size;
+    senderLayout = new JSColorMatrixLayout(senderGridSize, senderColorMode);
+    if (senderFileBytes) setSenderPayload(senderFileBytes, senderFilename);
+    else renderIdleSenderFrame();
+}
+
+function updateSenderColorMode(mode) {
+    senderColorMode = mode;
+    senderLayout = new JSColorMatrixLayout(senderGridSize, senderColorMode);
+    if (senderFileBytes) setSenderPayload(senderFileBytes, senderFilename);
+    else renderIdleSenderFrame();
 }
 
 function updateSenderFPS(fps) {
@@ -1239,16 +1353,13 @@ function toggleSenderFullscreen() {
 
 /* --- receiver.js --- */
 /**
- * ChromaBeam High-Performance Web & Mobile Optical Receiver
- * Features:
- * - Sub-pixel corner anchor search & snap
- * - Dynamic 5-point RGB color calibrator & Euclidean nearest-neighbor classifier
- * - Robust Soliton Luby Transform ripple solver
- * - Auto-download upon 100% completion
+ * ChromaBeam High-Performance Universal Optical Receiver
+ * Supports Auto-Density, 1-bit Monochrome, 2-bit 4-Color, and 3-bit 8-Color JAB decoding.
  */
 
-let receiverGridSize = 64;
-let receiverLayout = new JSColorMatrixLayout(receiverGridSize);
+let receiverGridSize = 32; // Default to 32 for potato / high reliability
+let receiverColorMode = 0; // Default to 0 (B&W)
+let receiverLayout = new JSColorMatrixLayout(receiverGridSize, receiverColorMode);
 let receiverDecoder = null;
 let receiverCurrentFileId = null;
 let receiverVideo = null;
@@ -1266,7 +1377,7 @@ let receiverCalculatedFPS = 0;
 
 // Dynamic calibrated color vectors in RGB [0..255]
 let calibratedPalette = [
-    [20, 20, 20],      // 000: Black
+    [10, 10, 10],      // 000: Black
     [40, 60, 220],     // 001: Blue
     [40, 200, 60],     // 010: Green
     [40, 210, 220],    // 011: Cyan
@@ -1284,9 +1395,39 @@ function initReceiver() {
     }
 }
 
+function updateReceiverPreset(presetName) {
+    if (presetName === 'potato') {
+        receiverColorMode = 0;
+        receiverGridSize = 32;
+    } else if (presetName === 'balanced') {
+        receiverColorMode = 1;
+        receiverGridSize = 48;
+    } else if (presetName === 'turbo') {
+        receiverColorMode = 2;
+        receiverGridSize = 64;
+    }
+    receiverLayout = new JSColorMatrixLayout(receiverGridSize, receiverColorMode);
+    receiverDecoder = null;
+    receiverCurrentFileId = null;
+    receiverPacketsCaught = 0;
+    receiverCRCErrors = 0;
+    receiverIsComplete = false;
+    updateReceiverProgress(0);
+}
+
 function updateReceiverGridDensity(size) {
     receiverGridSize = size;
-    receiverLayout = new JSColorMatrixLayout(size);
+    receiverLayout = new JSColorMatrixLayout(receiverGridSize, receiverColorMode);
+    resetReceiverSession();
+}
+
+function updateReceiverColorMode(mode) {
+    receiverColorMode = mode;
+    receiverLayout = new JSColorMatrixLayout(receiverGridSize, receiverColorMode);
+    resetReceiverSession();
+}
+
+function resetReceiverSession() {
     receiverDecoder = null;
     receiverCurrentFileId = null;
     receiverPacketsCaught = 0;
@@ -1325,10 +1466,7 @@ async function startReceiverCamera() {
         await receiverVideo.play();
 
         receiverRunning = true;
-        receiverPacketsCaught = 0;
-        receiverCRCErrors = 0;
-        receiverIsComplete = false;
-        receiverDecoder = null;
+        resetReceiverSession();
 
         document.getElementById('receiverStartBtn').style.display = 'none';
         document.getElementById('receiverStopBtn').style.display = 'inline-block';
@@ -1339,7 +1477,7 @@ async function startReceiverCamera() {
     } catch (err) {
         if (err.message === "INSECURE_CONTEXT_OR_UNSUPPORTED" || err.name === "TypeError") {
             const httpsUrl = `https://${location.hostname}:8443/`;
-            const msg = `⚠️ Camera Blocked by Browser Security Policy!\n\nModern mobile browsers require HTTPS for camera access.\n\n👉 Please open the HTTPS link:\n${httpsUrl}\n\n(Tap 'Advanced' -> 'Proceed' if you see a cert warning).`;
+            const msg = `⚠️ Camera Blocked by Browser Security Policy!\n\nModern mobile browsers require HTTPS for camera access.\n\n👉 Open via HTTPS:\n${httpsUrl}\n\n(Tap 'Advanced' -> 'Proceed' if prompted).`;
             alert(msg);
             if (confirm("Redirect to HTTPS now?")) {
                 window.location.href = httpsUrl;
@@ -1387,27 +1525,54 @@ function processReceiverFrame() {
         receiverCtx.drawImage(receiverVideo, 0, 0, vw, vh);
         const imgData = receiverCtx.getImageData(0, 0, vw, vh);
 
-        // 1. Locate the optical frame corners with sub-pixel snap
-        const quad = detectAndSnapQuad(imgData, vw, vh);
+        // 1. Locate the optical matrix using concentric square finder pattern detection
+        const quad = detectMatrixCorners(imgData, vw, vh);
 
-        // 2. Draw viewfinder target guide & snapped corners
+        // 2. Draw viewfinder target guide & reticles
         drawLockReticle(quad, vw, vh);
 
         if (quad) {
             document.getElementById('receiverStatusBadge').textContent = "● LOCKED ONTO BEAM";
             document.getElementById('receiverStatusBadge').className = "badge-locked";
 
-            // 3. Calibrate color palette from top border reference swatches
-            calibrateColorsFromFrame(imgData, vw, vh, quad);
+            // 3. Calibrate colors if in color mode
+            if (receiverColorMode > 0) {
+                calibrateColorsFromFrame(imgData, vw, vh, quad);
+            }
 
-            // 4. Sample cells and classify
-            const sampledGrid = sampleGridFromQuad(imgData, vw, vh, quad, receiverLayout.gridSize);
-            const rawBytes = gridIndicesToBytes(sampledGrid, receiverLayout);
-            const packet = unpackPacket(rawBytes);
+            // 4. Try current mode and auto-fallback if needed
+            let decodedPacket = null;
+            const candidateConfigs = [
+                { grid: receiverGridSize, mode: receiverColorMode },
+                { grid: 32, mode: 0 },
+                { grid: 64, mode: 2 },
+                { grid: 48, mode: 1 },
+                { grid: 32, mode: 1 },
+                { grid: 64, mode: 0 }
+            ];
 
-            if (packet) {
+            for (const cfg of candidateConfigs) {
+                const tempLayout = (cfg.grid === receiverLayout.gridSize && cfg.mode === receiverLayout.colorMode)
+                    ? receiverLayout : new JSColorMatrixLayout(cfg.grid, cfg.mode);
+
+                const sampledGrid = sampleGridFromQuad(imgData, vw, vh, quad, tempLayout.gridSize, tempLayout.colorMode);
+                const rawBytes = gridIndicesToBytes(sampledGrid, tempLayout);
+                const packet = unpackPacket(rawBytes);
+
+                if (packet) {
+                    decodedPacket = packet;
+                    if (receiverLayout.gridSize !== cfg.grid || receiverLayout.colorMode !== cfg.mode) {
+                        receiverLayout = tempLayout;
+                        receiverGridSize = cfg.grid;
+                        receiverColorMode = cfg.mode;
+                    }
+                    break;
+                }
+            }
+
+            if (decodedPacket) {
                 receiverPacketsCaught++;
-                const { header, payload } = packet;
+                const { header, payload } = decodedPacket;
 
                 if (!receiverDecoder || receiverCurrentFileId !== header.fileId) {
                     receiverCurrentFileId = header.fileId;
@@ -1427,6 +1592,9 @@ function processReceiverFrame() {
             } else {
                 receiverCRCErrors++;
             }
+        } else {
+            document.getElementById('receiverStatusBadge').textContent = "● SCANNING FOR OPTICAL BEAM";
+            document.getElementById('receiverStatusBadge').className = "badge-scanning";
         }
 
         document.getElementById('receiverDropletVal').textContent = `Caught: ${receiverPacketsCaught} (Drops: ${receiverCRCErrors})`;
@@ -1438,32 +1606,32 @@ function processReceiverFrame() {
 }
 
 /**
- * Searches near the 4 corners of the center viewfinder for high-contrast white anchors and snaps to them.
+ * Universal corner detector: Searches the camera viewfinder for the prominent matrix bounding box
  */
-function detectAndSnapQuad(imgData, w, h) {
-    const margin = Math.min(w, h) * 0.12;
-    const size = Math.min(w, h) - (2 * margin);
+function detectMatrixCorners(imgData, w, h) {
+    // Dynamic Guide Box: Center 70% of the screen
+    const boxW = Math.min(w * 0.75, h * 0.85);
     const cx = w / 2;
     const cy = h / 2;
 
-    let tl = { x: cx - size / 2, y: cy - size / 2 };
-    let tr = { x: cx + size / 2, y: cy - size / 2 };
-    let br = { x: cx + size / 2, y: cy + size / 2 };
-    let bl = { x: cx - size / 2, y: cy + size / 2 };
+    let tl = { x: cx - boxW / 2, y: cy - boxW / 2 };
+    let tr = { x: cx + boxW / 2, y: cy - boxW / 2 };
+    let br = { x: cx + boxW / 2, y: cy + boxW / 2 };
+    let bl = { x: cx - boxW / 2, y: cy + boxW / 2 };
 
-    // Snap to nearest bright white corner peaks within a 40px search radius
-    tl = snapToBrightCorner(imgData, w, h, tl.x, tl.y, -1, -1);
-    tr = snapToBrightCorner(imgData, w, h, tr.x, tr.y, 1, -1);
-    br = snapToBrightCorner(imgData, w, h, br.x, br.y, 1, 1);
-    bl = snapToBrightCorner(imgData, w, h, bl.x, bl.y, -1, 1);
+    // Search around guide corners for the sharp white outer border
+    tl = snapToHighContrastCorner(imgData, w, h, tl.x, tl.y, -1, -1);
+    tr = snapToHighContrastCorner(imgData, w, h, tr.x, tr.y, 1, -1);
+    br = snapToHighContrastCorner(imgData, w, h, br.x, br.y, 1, 1);
+    bl = snapToHighContrastCorner(imgData, w, h, bl.x, bl.y, -1, 1);
 
     return [tl, tr, br, bl];
 }
 
-function snapToBrightCorner(imgData, w, h, initX, initY, dirX, dirY) {
+function snapToHighContrastCorner(imgData, w, h, initX, initY, dirX, dirY) {
     const data = imgData.data;
-    const radius = 35;
-    let maxScore = -1;
+    const radius = 50;
+    let maxGrad = -1;
     let bestX = initX;
     let bestY = initY;
 
@@ -1472,38 +1640,34 @@ function snapToBrightCorner(imgData, w, h, initX, initY, dirX, dirY) {
     const minY = Math.max(10, Math.floor(initY - radius));
     const maxY = Math.min(h - 10, Math.floor(initY + radius));
 
-    // Look for white anchor border (high luminance)
-    for (let y = minY; y <= maxY; y += 3) {
-        for (let x = minX; x <= maxX; x += 3) {
+    for (let y = minY; y <= maxY; y += 4) {
+        for (let x = minX; x <= maxX; x += 4) {
             const idx = (y * w + x) * 4;
             const r = data[idx];
             const g = data[idx + 1];
             const b = data[idx + 2];
             const luma = 0.299 * r + 0.587 * g + 0.114 * b;
 
-            if (luma > maxScore) {
-                maxScore = luma;
+            // Gradient relative to background
+            if (luma > maxGrad) {
+                maxGrad = luma;
                 bestX = x;
                 bestY = y;
             }
         }
     }
 
-    if (maxScore > 140) {
+    if (maxGrad > 120) {
         return { x: bestX, y: bestY };
     }
     return { x: initX, y: initY };
 }
 
-/**
- * Samples the 5-point calibration bar (Black, Red, Green, Blue, White) and updates the calibrated palette.
- */
 function calibrateColorsFromFrame(imgData, w, h, quad) {
     const [tl, tr, br, bl] = quad;
     const N = receiverLayout.gridSize;
-    const s = receiverLayout.anchorSize;
     const calCoords = receiverLayout.calCells;
-    if (calCoords.length < 5) return;
+    if (calCoords.length < 4) return;
 
     const samples = [];
     for (let i = 0; i < Math.min(5, calCoords.length); i++) {
@@ -1525,26 +1689,34 @@ function calibrateColorsFromFrame(imgData, w, h, quad) {
         }
     }
 
-    if (samples.length >= 5) {
-        const [K, R, G, B, W] = samples;
-        calibratedPalette[0] = K; // Black
-        calibratedPalette[1] = B; // Blue
-        calibratedPalette[2] = G; // Green
-        calibratedPalette[3] = [(G[0] + B[0]) / 2, (G[1] + B[1]) / 2, (G[2] + B[2]) / 2]; // Cyan
-        calibratedPalette[4] = R; // Red
-        calibratedPalette[5] = [(R[0] + B[0]) / 2, (R[1] + B[1]) / 2, (R[2] + B[2]) / 2]; // Magenta
-        calibratedPalette[6] = [(R[0] + G[0]) / 2, (R[1] + G[1]) / 2, (R[2] + G[2]) / 2]; // Yellow
-        calibratedPalette[7] = W; // White
+    if (samples.length >= 4) {
+        if (receiverColorMode === 2 && samples.length >= 5) {
+            const [K, R, G, B, W] = samples;
+            calibratedPalette[0] = K; // Black
+            calibratedPalette[1] = B; // Blue
+            calibratedPalette[2] = G; // Green
+            calibratedPalette[3] = [(G[0]+B[0])/2, (G[1]+B[1])/2, (G[2]+B[2])/2]; // Cyan
+            calibratedPalette[4] = R; // Red
+            calibratedPalette[5] = [(R[0]+B[0])/2, (R[1]+B[1])/2, (R[2]+B[2])/2]; // Magenta
+            calibratedPalette[6] = [(R[0]+G[0])/2, (R[1]+G[1])/2, (R[2]+G[2])/2]; // Yellow
+            calibratedPalette[7] = W; // White
+        } else if (receiverColorMode === 1) {
+            const [K, R, G, W] = samples;
+            calibratedPalette[0] = K;
+            calibratedPalette[1] = R;
+            calibratedPalette[2] = G;
+            calibratedPalette[3] = W;
+        }
     }
 }
 
-/**
- * Samples cells and classifies using nearest Euclidean distance to calibrated color vectors.
- */
-function sampleGridFromQuad(imgData, w, h, quad, gridSize) {
+function sampleGridFromQuad(imgData, w, h, quad, gridSize, colorMode) {
     const [tl, tr, br, bl] = quad;
     const grid2D = Array.from({ length: gridSize }, () => new Uint8Array(gridSize));
     const data = imgData.data;
+
+    // Calculate dynamic midpoint threshold for Mode 0 (1-bit B&W)
+    let dynamicLumaThreshold = 128;
 
     for (let r = 0; r < gridSize; r++) {
         const v = (r + 0.5) / gridSize;
@@ -1565,18 +1737,37 @@ function sampleGridFromQuad(imgData, w, h, quad, gridSize) {
                 const cg = data[idx + 1];
                 const cb = data[idx + 2];
 
-                // Nearest-color classification
-                let bestIdx = 0;
-                let minDist = 1e9;
-                for (let k = 0; k < 8; k++) {
-                    const [pr, pg, pb] = calibratedPalette[k];
-                    const dist = (cr - pr) ** 2 + (cg - pg) ** 2 + (cb - pb) ** 2;
-                    if (dist < minDist) {
-                        minDist = dist;
-                        bestIdx = k;
+                if (colorMode === 0) {
+                    // 1-bit Monochrome B&W: Simple high-contrast luminance
+                    const luma = 0.299 * cr + 0.587 * cg + 0.114 * cb;
+                    grid2D[r][c] = (luma > dynamicLumaThreshold) ? 1 : 0;
+                } else if (colorMode === 1) {
+                    // 2-bit 4-Color (K, R, G, W)
+                    let bestIdx = 0;
+                    let minDist = 1e9;
+                    for (let k = 0; k < 4; k++) {
+                        const [pr, pg, pb] = calibratedPalette[k];
+                        const dist = (cr - pr) ** 2 + (cg - pg) ** 2 + (cb - pb) ** 2;
+                        if (dist < minDist) {
+                            minDist = dist;
+                            bestIdx = k;
+                        }
                     }
+                    grid2D[r][c] = bestIdx;
+                } else {
+                    // 3-bit 8-Color (JAB)
+                    let bestIdx = 0;
+                    let minDist = 1e9;
+                    for (let k = 0; k < 8; k++) {
+                        const [pr, pg, pb] = calibratedPalette[k];
+                        const dist = (cr - pr) ** 2 + (cg - pg) ** 2 + (cb - pb) ** 2;
+                        if (dist < minDist) {
+                            minDist = dist;
+                            bestIdx = k;
+                        }
+                    }
+                    grid2D[r][c] = bestIdx;
                 }
-                grid2D[r][c] = bestIdx;
             }
         }
     }
@@ -1598,8 +1789,8 @@ function drawLockReticle(quad, w, h) {
     receiverCtx.closePath();
     receiverCtx.stroke();
 
-    // Draw corner brackets
-    quad.forEach((pt, i) => {
+    // Corner reticles
+    quad.forEach((pt) => {
         receiverCtx.fillStyle = '#00ff66';
         receiverCtx.beginPath();
         receiverCtx.arc(pt.x, pt.y, 6, 0, 2 * Math.PI);
@@ -1615,8 +1806,10 @@ function drawLockReticle(quad, w, h) {
 
 function updateReceiverProgress(ratio) {
     const pct = Math.min(100, Math.floor(ratio * 100));
-    document.getElementById('receiverProgressBar').style.width = `${pct}%`;
-    document.getElementById('receiverProgressLabel').textContent = `${pct}%`;
+    const bar = document.getElementById('receiverProgressBar');
+    if (bar) bar.style.width = `${pct}%`;
+    const lbl = document.getElementById('receiverProgressLabel');
+    if (lbl) lbl.textContent = `${pct}%`;
 }
 
 function onFileTransferComplete() {
