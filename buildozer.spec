@@ -15,6 +15,10 @@ source.dir = .
 # (list) Source files to include (let empty to include all the files)
 source.include_exts = py,png,jpg,kv,atlas,html,js,css,json,ico
 
+# (list) List of directory to exclude (let empty to not exclude anything)
+source.exclude_dirs = dist,scripts,.git,.github,desktop_receiver,desktop_sender,__pycache__,tests,.agents
+
+
 # (str) Icon of the application
 icon.filename = %(source.dir)s/assets/icon.png
 
