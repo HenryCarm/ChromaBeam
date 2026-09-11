@@ -32,7 +32,7 @@ version = 1.0.0
 android.numeric_version = 2680317
 
 # (list) Application requirements
-requirements = python3,kivy,android,pyjnius,numpy,opencv,plyer
+requirements = python3,kivy,android,pyjnius,numpy==1.26.4,opencv,plyer
 
 # (list) Supported architectures
 android.archs = arm64-v8a
