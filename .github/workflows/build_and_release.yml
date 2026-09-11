@@ -27,6 +27,7 @@ jobs:
         with:
           python-version: '3.12'
           cache: 'pip'
+          cache-dependency-path: 'requirements-desktop.txt'
 
       - name: Install System Dependencies
         run: |
@@ -88,6 +89,7 @@ jobs:
         with:
           python-version: '3.12'
           cache: 'pip'
+          cache-dependency-path: 'requirements-desktop.txt'
 
       - name: Install Python Dependencies
         run: |
