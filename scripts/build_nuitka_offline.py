@@ -35,7 +35,7 @@ def main():
     cmd_standalone = [
         VENV_PYTHON, "-m", "nuitka",
         "--standalone",
-        "--enable-plugin=pyqt6",
+        "--enable-plugin=pyside6",
         "--include-package=core",
         "--include-package=desktop_receiver",
         "--include-package=desktop_sender",
@@ -58,7 +58,7 @@ def main():
     cmd_onefile = [
         VENV_PYTHON, "-m", "nuitka",
         "--onefile",
-        "--enable-plugin=pyqt6",
+        "--enable-plugin=pyside6",
         "--include-package=core",
         "--include-package=desktop_receiver",
         "--include-package=desktop_sender",

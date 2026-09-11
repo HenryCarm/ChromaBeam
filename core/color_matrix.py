@@ -51,7 +51,7 @@ class ColorMatrixLayout:
     def __init__(self, grid_size: int = 48, color_mode: int = MODE_3BIT_8COLOR):
         self.grid_size = grid_size
         self.color_mode = color_mode
-        self.module_scale = max(1, grid_size // 56)
+        self.module_scale = max(1, grid_size // 24)
         self.anchor_size = 7 * self.module_scale
 
         if self.color_mode == MODE_1BIT_BW:
@@ -69,10 +69,11 @@ class ColorMatrixLayout:
         s = self.anchor_size
         N = self.grid_size
 
-        # 3 Corners reserved for 1:1:3:1:1 standard QR finder patterns (TL, TR, BL)
-        self.data_mask[0:s, 0:s] = False
-        self.data_mask[0:s, N-s:N] = False
-        self.data_mask[N-s:N, 0:s] = False
+        # 3 Corners reserved for 1:1:3:1:1 standard QR finder patterns + 1 module white separator
+        s_with_sep = s + self.module_scale
+        self.data_mask[0:s_with_sep, 0:s_with_sep] = False
+        self.data_mask[0:s_with_sep, N-s_with_sep:N] = False
+        self.data_mask[N-s_with_sep:N, 0:s_with_sep] = False
 
         # Top border: Calibration & Mode Header cells
         cal_start = s
@@ -121,17 +122,20 @@ class ColorMatrixLayout:
 
         # 1:1:3:1:1 Standard QR Finder Patterns in 3 corners (TL, TR, BL) with scaled modules
 
-        # Top-Left
+        # Top-Left (with white separator)
+        grid[0:s+m, 0:s+m] = white
         grid[0:s, 0:s] = black
         grid[m:s-m, m:s-m] = white
         grid[2*m:s-2*m, 2*m:s-2*m] = black
 
         # Top-Right
+        grid[0:s+m, N-s-m:N] = white
         grid[0:s, N-s:N] = black
         grid[m:s-m, N-s+m:N-m] = white
         grid[2*m:s-2*m, N-s+2*m:N-2*m] = black
 
         # Bottom-Left
+        grid[N-s-m:N, 0:s+m] = white
         grid[N-s:N, 0:s] = black
         grid[N-s+m:N-m, m:s-m] = white
         grid[N-s+2*m:N-2*m, 2*m:s-2*m] = black

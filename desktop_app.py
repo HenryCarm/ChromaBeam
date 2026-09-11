@@ -1,5 +1,5 @@
 """
-ChromaBeam Unified Desktop Application (PyQt6)
+ChromaBeam Unified Desktop Application (PySide6)
 Features:
 - Grandma Presets: 🛡️ Potato Camera (1-bit B&W), ⚖️ Balanced (2-bit 4-Color), ⚡ Turbo (3-bit 8-Color)
 - Pro Settings (Custom grid density, frame rate, color modes)
@@ -14,13 +14,13 @@ import random
 import numpy as np
 import cv2
 
-from PyQt6.QtWidgets import (
+from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QSlider, QComboBox, QFileDialog, QFrame,
-    QProgressBar, QGroupBox, QTabWidget, QTextEdit, QRadioButton, QButtonGroup
+    QProgressBar, QGroupBox, QTabWidget, QTextEdit, QRadioButton, QButtonGroup, QDialog
 )
-from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal, QSettings
-from PyQt6.QtGui import QImage, QPixmap, QPainter, QColor, QFont, QIcon
+from PySide6.QtCore import Qt, QTimer, QThread, Signal, QSettings
+from PySide6.QtGui import QImage, QPixmap, QPainter, QColor, QFont, QIcon
 
 APP_DIR = os.path.dirname(os.path.abspath(sys.argv[0] if sys.argv[0] else __file__))
 sys.path.insert(0, APP_DIR)
@@ -36,7 +36,7 @@ from desktop_receiver.color_classifier import AdaptiveColorClassifier
 
 
 class MatrixCanvas(QWidget):
-    clicked = pyqtSignal()
+    clicked = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -88,8 +88,8 @@ class FullscreenMatrixDialog(QDialog):
 
 
 class CameraWorkerThread(QThread):
-    frame_ready = pyqtSignal(np.ndarray, dict)
-    file_received = pyqtSignal(str, int, str)
+    frame_ready = Signal(np.ndarray, dict)
+    file_received = Signal(str, int, str)
 
     def __init__(self, cam_index=0, output_dir=None):
         super().__init__()
@@ -678,7 +678,6 @@ class UnifiedChromaBeamApp(QMainWindow):
             self.stream_btn.setText("🛑 STOP OPTICAL BEAM")
             self.stream_btn.setObjectName("danger_btn")
             self.start_stream_time = time.time()
-            self.total_droplets_sent = 0
         else:
             self.stream_btn.setText("🚀 START OPTICAL BEAM")
             self.stream_btn.setObjectName("primary_btn")
