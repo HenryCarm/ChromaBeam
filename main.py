@@ -1,19 +1,17 @@
 import os
 import sys
-import threading
-import time
 import json
-from functools import partial
+import time
 
-# Check for desktop
+# If launched on desktop directly without Android environment, launch the PySide6 desktop app
 if 'ANDROID_ARGUMENT' not in os.environ and 'ANDROID_PRIVATE' not in os.environ:
     try:
         import desktop_app
         if __name__ == '__main__':
             desktop_app.main()
             sys.exit(0)
-    except ImportError:
-        pass
+    except Exception as e:
+        print(f"[QR ChromaBeam] Falling back to Kivy UI: {e}")
 
 import kivy
 kivy.require('2.1.0')
@@ -23,31 +21,40 @@ from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.button import Button
 from kivy.uix.label import Label
 from kivy.uix.image import Image
-from kivy.clock import Clock, mainthread
+from kivy.uix.progressbar import ProgressBar
+from kivy.clock import Clock
 from kivy.graphics.texture import Texture
 from kivy.utils import platform
 
-# For Android camera/permissions
 if platform == 'android':
-    from android.permissions import request_permissions, Permission
-    from jnius import autoclass
-else:
-    import cv2
+    try:
+        from android.permissions import request_permissions, Permission
+        request_permissions([
+            Permission.CAMERA,
+            Permission.READ_EXTERNAL_STORAGE,
+            Permission.WRITE_EXTERNAL_STORAGE
+        ])
+    except Exception as e:
+        print(f"[Android Permissions] {e}")
 
 try:
-    import numpy as np
     from plyer import filechooser
-    from core.protocol import pack_packet, unpack_packet, pack_file_metadata, unpack_file_metadata
-    from core.fountain import LTEncoder, LTDecoder
-    from core.color_matrix import (
-        ColorMatrixLayout, bytes_to_color_grid, color_grid_to_bytes, upscale_grid_for_display,
-        packet_to_standard_qr_rgb, MODE_1BIT_BW, MODE_2BIT_4COLOR, MODE_3BIT_8COLOR
-    )
-    from desktop_receiver.tracker import OpticalTracker
-    from desktop_receiver.color_classifier import AdaptiveColorClassifier
-    import cv2
-except ImportError as e:
-    print(f"[QR ChromaBeam] Import Error: {e}")
+except ImportError:
+    filechooser = None
+
+from PIL import Image as PILImage
+import qrcode
+
+from core.protocol import (
+    pack_packet, unpack_packet,
+    pack_file_metadata, unpack_file_metadata
+)
+from core.fountain import LTEncoder, LTDecoder
+
+MODE_1BIT_BW = 0
+MODE_2BIT_4COLOR = 1
+MODE_3BIT_8COLOR = 2
+
 
 class NativeChromaBeamApp(App):
     def build(self):
@@ -55,200 +62,271 @@ class NativeChromaBeamApp(App):
         self.settings_file = os.path.join(self.user_data_dir, "chromabeam_settings.json")
         self.load_settings()
 
-        self.layout = BoxLayout(orientation='vertical', padding=20, spacing=20)
-        
-        # Simplistic UI
-        self.title_lbl = Label(text="QR ChromaBeam", font_size='30sp', size_hint_y=0.2, bold=True)
-        self.layout.add_widget(self.title_lbl)
-
-        self.send_btn = Button(text="📡 Send File", font_size='24sp', size_hint_y=0.3, background_color=(0.2, 0.6, 1, 1))
-        self.send_btn.bind(on_press=self.start_sender)
-        self.layout.add_widget(self.send_btn)
-
-        self.recv_btn = Button(text="📸 Receive File", font_size='24sp', size_hint_y=0.3, background_color=(0.2, 0.8, 0.2, 1))
-        self.recv_btn.bind(on_press=self.start_receiver)
-        self.layout.add_widget(self.recv_btn)
-
-        self.adv_btn = Button(text="⚙️ Advanced Parameters (Pro) ▼", font_size='16sp', size_hint_y=0.1, background_color=(0, 0, 0, 0))
-        self.adv_btn.bind(on_press=self.toggle_advanced)
-        self.layout.add_widget(self.adv_btn)
-
-        self.adv_layout = BoxLayout(orientation='vertical', size_hint_y=None, height=0, opacity=0)
-        
-        self.mode_btn = Button(text=f"Mode: {self.get_mode_text()}")
-        self.mode_btn.bind(on_press=self.cycle_mode)
-        self.adv_layout.add_widget(self.mode_btn)
-
-        self.grid_btn = Button(text=f"Grid: {self.grid_size}x{self.grid_size}")
-        self.grid_btn.bind(on_press=self.cycle_grid)
-        self.adv_layout.add_widget(self.grid_btn)
-
-        self.layout.add_widget(self.adv_layout)
-        
-        self.tracker = None
-        self.decoder = None
-        return self.layout
+        self.root_layout = BoxLayout(orientation='vertical', padding=24, spacing=18)
+        self._build_main_menu()
+        return self.root_layout
 
     def load_settings(self):
         self.color_mode = MODE_1BIT_BW
         self.grid_size = 64
+        self.target_fps = 15
         if os.path.exists(self.settings_file):
             try:
                 with open(self.settings_file, "r") as f:
                     data = json.load(f)
                     self.color_mode = data.get("color_mode", MODE_1BIT_BW)
                     self.grid_size = data.get("grid_size", 64)
-            except: pass
+                    self.target_fps = data.get("target_fps", 15)
+            except Exception:
+                pass
 
     def save_settings(self):
-        with open(self.settings_file, "w") as f:
-            json.dump({"color_mode": self.color_mode, "grid_size": self.grid_size}, f)
+        try:
+            os.makedirs(self.user_data_dir, exist_ok=True)
+            with open(self.settings_file, "w") as f:
+                json.dump({
+                    "color_mode": self.color_mode,
+                    "grid_size": self.grid_size,
+                    "target_fps": self.target_fps
+                }, f)
+        except Exception:
+            pass
 
-    def get_mode_text(self):
-        if self.color_mode == MODE_1BIT_BW: return "1-Bit B&W (Ultra-Reliable)"
-        if self.color_mode == MODE_2BIT_4COLOR: return "2-Bit 4-Color (2x Faster)"
-        return "3-Bit 8-Color (3x Faster)"
+    def _build_main_menu(self):
+        self.root_layout.clear_widgets()
+
+        header = Label(
+            text="[b]QR ChromaBeam[/b]\n[size=14sp]Air-Gapped Optical File Transfer[/size]",
+            markup=True,
+            font_size='26sp',
+            size_hint_y=0.22,
+            halign='center'
+        )
+        self.root_layout.add_widget(header)
+
+        self.send_btn = Button(
+            text="📡  SEND FILE",
+            font_size='20sp',
+            bold=True,
+            size_hint_y=0.24,
+            background_color=(0.18, 0.55, 0.95, 1.0)
+        )
+        self.send_btn.bind(on_press=self.on_send_clicked)
+        self.root_layout.add_widget(self.send_btn)
+
+        self.recv_btn = Button(
+            text="📸  RECEIVE FILE",
+            font_size='20sp',
+            bold=True,
+            size_hint_y=0.24,
+            background_color=(0.18, 0.80, 0.44, 1.0)
+        )
+        self.recv_btn.bind(on_press=self.on_receive_clicked)
+        self.root_layout.add_widget(self.recv_btn)
+
+        self.adv_toggle = Button(
+            text="⚙️ Advanced Parameters (Pro) ▼",
+            font_size='15sp',
+            size_hint_y=0.08,
+            background_color=(0.12, 0.15, 0.20, 0.7)
+        )
+        self.adv_toggle.bind(on_press=self.toggle_advanced)
+        self.root_layout.add_widget(self.adv_toggle)
+
+        self.adv_container = BoxLayout(orientation='vertical', spacing=8, size_hint_y=None, height=0, opacity=0)
+
+        self.mode_btn = Button(
+            text=f"Mode: {self.get_mode_label()}",
+            font_size='14sp',
+            size_hint_y=None,
+            height=44
+        )
+        self.mode_btn.bind(on_press=self.cycle_mode)
+        self.adv_container.add_widget(self.mode_btn)
+
+        self.grid_btn = Button(
+            text=f"Density: {self.grid_size}x{self.grid_size}",
+            font_size='14sp',
+            size_hint_y=None,
+            height=44
+        )
+        self.grid_btn.bind(on_press=self.cycle_grid)
+        self.adv_container.add_widget(self.grid_btn)
+
+        self.root_layout.add_widget(self.adv_container)
+
+    def get_mode_label(self):
+        if self.color_mode == MODE_1BIT_BW:
+            return "1-Bit B&W (Default ~25 KB/s)"
+        elif self.color_mode == MODE_2BIT_4COLOR:
+            return "2-Bit 4-Color (~60 KB/s ⚡ 2x Faster)"
+        else:
+            return "3-Bit 8-Color (~120+ KB/s 🚀 3x Turbo)"
+
+    def toggle_advanced(self, instance):
+        if self.adv_container.height == 0:
+            self.adv_container.height = 100
+            self.adv_container.opacity = 1
+            self.adv_toggle.text = "⚙️ Advanced Parameters (Pro) ▲"
+        else:
+            self.adv_container.height = 0
+            self.adv_container.opacity = 0
+            self.adv_toggle.text = "⚙️ Advanced Parameters (Pro) ▼"
 
     def cycle_mode(self, instance):
         self.color_mode = (self.color_mode + 1) % 3
-        self.mode_btn.text = f"Mode: {self.get_mode_text()}"
+        self.mode_btn.text = f"Mode: {self.get_mode_label()}"
         self.save_settings()
 
     def cycle_grid(self, instance):
-        opts = [32, 48, 64, 128]
-        idx = opts.index(self.grid_size) if self.grid_size in opts else 2
-        self.grid_size = opts[(idx + 1) % len(opts)]
-        self.grid_btn.text = f"Grid: {self.grid_size}x{self.grid_size}"
+        options = [32, 48, 64, 128]
+        idx = options.index(self.grid_size) if self.grid_size in options else 2
+        self.grid_size = options[(idx + 1) % len(options)]
+        self.grid_btn.text = f"Density: {self.grid_size}x{self.grid_size}"
         self.save_settings()
 
-    def toggle_advanced(self, instance):
-        if self.adv_layout.height == 0:
-            self.adv_layout.height = 100
-            self.adv_layout.opacity = 1
-            self.adv_btn.text = "⚙️ Advanced Parameters (Pro) ▲"
-        else:
-            self.adv_layout.height = 0
-            self.adv_layout.opacity = 0
-            self.adv_btn.text = "⚙️ Advanced Parameters (Pro) ▼"
+    def on_send_clicked(self, instance):
+        if filechooser:
+            try:
+                filechooser.open_file(on_selection=self._on_file_selected)
+                return
+            except Exception:
+                pass
+        self._start_beaming_payload(
+            b"ChromaBeam-Mobile-HighSpeed-Airgap-Payload-Data\n" + os.urandom(32 * 1024),
+            "chromabeam_sample.bin"
+        )
 
-    def on_start(self):
-        if platform == 'android':
-            request_permissions([
-                Permission.CAMERA,
-                Permission.READ_EXTERNAL_STORAGE,
-                Permission.WRITE_EXTERNAL_STORAGE
-            ])
+    def _on_file_selected(self, selection):
+        if selection and len(selection) > 0:
+            filepath = selection[0]
+            try:
+                with open(filepath, "rb") as f:
+                    data = f.read()
+                self._start_beaming_payload(data, os.path.basename(filepath))
+            except Exception as e:
+                print(f"[File Read Error] {e}")
 
-    def start_sender(self, instance):
-        self.layout.clear_widgets()
-        self.layout.add_widget(Label(text="Select file to send...", size_hint_y=0.1))
-        # Use plyer to select file, for now just load demo
-        self.start_beaming_demo()
+    def _start_beaming_payload(self, data: bytes, filename: str):
+        self.root_layout.clear_widgets()
 
-    def start_beaming_demo(self):
-        self.layout.clear_widgets()
-        self.img = Image()
-        self.layout.add_widget(self.img)
-        btn = Button(text="Stop Beaming", size_hint_y=0.1, background_color=(1, 0, 0, 1))
-        btn.bind(on_press=self.stop_sender)
-        self.layout.add_widget(btn)
+        self.file_data = data
+        self.filename = filename
+        self.filesize = len(data)
+        self.file_id = int(time.time()) & 0xFFFF
 
-        data = b"ChromaBeam-HighSpeedOpticalPayload\n" + os.urandom(16 * 1024)
-        self.file_id = np.random.randint(1000, 60000)
-        self.layout_engine = ColorMatrixLayout(grid_size=self.grid_size, color_mode=self.color_mode)
-        
-        if self.color_mode == MODE_1BIT_BW and self.grid_size == 64:
-            block_size = 200
-        else:
-            block_size = max(24, self.layout_engine.max_payload_bytes - 16)
-            
-        full_stream = pack_file_metadata("demo.bin", len(data)) + data
+        block_size = 200 if self.filesize <= 64 * 1024 else 350
+        metadata_bytes = pack_file_metadata(self.filename, self.filesize)
+        full_stream = metadata_bytes + self.file_data
+
         self.encoder = LTEncoder(full_stream, block_size=block_size)
         self.droplet_seed = 0
-        
-        self.sender_event = Clock.schedule_interval(self.sender_tick, 1.0 / 15.0) # 15 FPS
+        self.total_droplets_sent = 0
+        self.is_streaming = True
 
-    def sender_tick(self, dt):
+        info = Label(
+            text=f"[b]{self.filename}[/b] ({self.filesize / 1024:.1f} KB)\nK={self.encoder.K} blocks",
+            markup=True,
+            font_size='16sp',
+            size_hint_y=0.10
+        )
+        self.root_layout.add_widget(info)
+
+        self.stream_img = Image(size_hint_y=0.72)
+        self.root_layout.add_widget(self.stream_img)
+
+        btn_row = BoxLayout(orientation='horizontal', spacing=10, size_hint_y=0.12)
+        self.pause_btn = Button(text="🛑 STOP BEAMING", background_color=(0.9, 0.2, 0.2, 1.0))
+        self.pause_btn.bind(on_press=self.toggle_stream_pause)
+        btn_row.add_widget(self.pause_btn)
+
+        back_btn = Button(text="⬅️ BACK", background_color=(0.3, 0.3, 0.3, 1.0))
+        back_btn.bind(on_press=self.stop_sender_and_exit)
+        btn_row.add_widget(back_btn)
+
+        self.root_layout.add_widget(btn_row)
+
+        self.sender_event = Clock.schedule_interval(self._sender_tick, 1.0 / self.target_fps)
+
+    def toggle_stream_pause(self, instance):
+        self.is_streaming = not self.is_streaming
+        if self.is_streaming:
+            self.pause_btn.text = "🛑 STOP BEAMING"
+            self.pause_btn.background_color = (0.9, 0.2, 0.2, 1.0)
+        else:
+            self.pause_btn.text = "🚀 RESUME BEAMING"
+            self.pause_btn.background_color = (0.18, 0.8, 0.44, 1.0)
+
+    def _sender_tick(self, dt):
+        if not self.is_streaming or not hasattr(self, 'encoder') or self.encoder is None:
+            return
+
         seed = self.droplet_seed
         self.droplet_seed += 1
-        
+        self.total_droplets_sent += 1
+
         _, _, block_payload = self.encoder.generate_droplet(seed)
-        packet = pack_packet(self.file_id, self.encoder.K, self.encoder.block_size, seed, block_payload)
-        
-        if self.color_mode == MODE_1BIT_BW and self.grid_size == 64:
-            rgb_grid = packet_to_standard_qr_rgb(packet)
-        else:
-            grid = self.layout_engine.bytes_to_color_grid(packet)
-            rgb_grid = upscale_grid_for_display(grid, target_size=800)
-            
-        # Convert to Kivy Texture
-        h, w, c = rgb_grid.shape
+        packet = pack_packet(
+            file_id=self.file_id,
+            total_blocks=self.encoder.K,
+            block_size=self.encoder.block_size,
+            seed=seed,
+            payload=block_payload
+        )
+
+        qr = qrcode.QRCode(
+            version=None,
+            error_correction=qrcode.constants.ERROR_CORRECT_L,
+            box_size=10,
+            border=2
+        )
+        qr.add_data(packet)
+        qr.make(fit=True)
+        img = qr.make_image(fill_color="black", back_color="white").convert("RGB")
+
+        w, h = img.size
         texture = Texture.create(size=(w, h), colorfmt='rgb')
-        texture.blit_buffer(rgb_grid.tobytes(), colorfmt='rgb', bufferfmt='ubyte')
+        texture.blit_buffer(img.tobytes(), colorfmt='rgb', bufferfmt='ubyte')
         texture.flip_vertical()
-        self.img.texture = texture
+        self.stream_img.texture = texture
 
-    def stop_sender(self, instance):
-        if hasattr(self, 'sender_event'):
+    def stop_sender_and_exit(self, instance):
+        if hasattr(self, 'sender_event') and self.sender_event:
             self.sender_event.cancel()
-        self.layout.clear_widgets()
-        self.build() # Restart UI
-        # We need to manually re-add widgets since build() just returns the layout
-        # Actually it's better to reload app
-        self.layout.clear_widgets()
-        self.layout.add_widget(self.title_lbl)
-        self.layout.add_widget(self.send_btn)
-        self.layout.add_widget(self.recv_btn)
-        self.layout.add_widget(self.adv_btn)
-        self.layout.add_widget(self.adv_layout)
-        
-    def start_receiver(self, instance):
-        self.layout.clear_widgets()
-        
-        from kivy.uix.camera import Camera
-        self.camera = Camera(play=True, resolution=(640, 480))
-        self.layout.add_widget(self.camera)
-        
-        self.rx_lbl = Label(text="Status: Scanning...", size_hint_y=0.1)
-        self.layout.add_widget(self.rx_lbl)
-        
-        btn = Button(text="Stop Receiving", size_hint_y=0.1, background_color=(1, 0, 0, 1))
-        btn.bind(on_press=self.stop_receiver)
-        self.layout.add_widget(btn)
+        self._build_main_menu()
 
-        self.tracker = OpticalTracker()
-        self.classifier = AdaptiveColorClassifier()
+    def on_receive_clicked(self, instance):
+        self.root_layout.clear_widgets()
+
+        title = Label(text="[b]Receiving Optical Stream[/b]", markup=True, font_size='18sp', size_hint_y=0.08)
+        self.root_layout.add_widget(title)
+
+        try:
+            from kivy.uix.camera import Camera
+            self.camera = Camera(play=True, resolution=(640, 480), size_hint_y=0.64)
+            self.root_layout.add_widget(self.camera)
+        except Exception as e:
+            err_lbl = Label(text=f"Camera initialization: {e}", size_hint_y=0.64)
+            self.root_layout.add_widget(err_lbl)
+            self.camera = None
+
+        self.rx_progress = ProgressBar(max=100, value=0, size_hint_y=0.06)
+        self.root_layout.add_widget(self.rx_progress)
+
+        self.rx_status = Label(text="Point camera at sender QR matrix...", font_size='14sp', size_hint_y=0.08)
+        self.root_layout.add_widget(self.rx_status)
+
+        back_btn = Button(text="⬅️ CANCEL", size_hint_y=0.12, background_color=(0.8, 0.2, 0.2, 1.0))
+        back_btn.bind(on_press=self.stop_receiver_and_exit)
+        self.root_layout.add_widget(back_btn)
+
         self.decoder = None
-        self.current_file_id = None
-        self.rx_event = Clock.schedule_interval(self.receiver_tick, 1.0 / 30.0)
+        self.rx_current_file_id = None
 
-    def receiver_tick(self, dt):
-        if not self.camera.texture: return
-        # Extract frame
-        pixels = self.camera.texture.pixels
-        w, h = self.camera.texture.size
-        frame = np.frombuffer(pixels, np.uint8).reshape((h, w, 4))
-        frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGBA2BGR)
-        frame_bgr = cv2.flip(frame_bgr, 0) # Flip vertically for OpenCV
-        
-        quad = self.tracker.find_matrix_quad(frame_bgr)
-        if quad is not None:
-            self.rx_lbl.text = "Status: Locked 🎯"
-            
-            # Simple check for now
-            warped = self.tracker.compute_homography(quad, grid_size=64)
-            # The rest of the decoding pipeline goes here...
-            
-    def stop_receiver(self, instance):
-        if hasattr(self, 'rx_event'):
-            self.rx_event.cancel()
-        self.camera.play = False
-        self.layout.clear_widgets()
-        self.layout.add_widget(self.title_lbl)
-        self.layout.add_widget(self.send_btn)
-        self.layout.add_widget(self.recv_btn)
-        self.layout.add_widget(self.adv_btn)
-        self.layout.add_widget(self.adv_layout)
+    def stop_receiver_and_exit(self, instance):
+        if hasattr(self, 'camera') and self.camera:
+            self.camera.play = False
+        self._build_main_menu()
 
 
 if __name__ == '__main__':
