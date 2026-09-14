@@ -37,14 +37,6 @@ if platform == 'android':
     except Exception as e:
         print(f"[Android Permissions] {e}")
 
-try:
-    from plyer import filechooser
-except ImportError:
-    filechooser = None
-
-from PIL import Image as PILImage
-import qrcode
-
 from core.protocol import (
     pack_packet, unpack_packet,
     pack_file_metadata, unpack_file_metadata
@@ -54,6 +46,104 @@ from core.fountain import LTEncoder, LTDecoder
 MODE_1BIT_BW = 0
 MODE_2BIT_4COLOR = 1
 MODE_3BIT_8COLOR = 2
+
+PALETTE_1BIT = [(0, 0, 0), (255, 255, 255)]
+PALETTE_2BIT = [(0, 0, 0), (255, 50, 50), (50, 255, 50), (255, 255, 255)]
+PALETTE_3BIT = [
+    (0, 0, 0), (0, 0, 255), (0, 255, 0), (0, 255, 255),
+    (255, 0, 0), (255, 0, 255), (255, 255, 0), (255, 255, 255)
+]
+
+
+def render_matrix_texture(payload_bytes: bytes, grid_size: int = 48, color_mode: int = MODE_1BIT_BW, target_px: int = 512) -> Texture:
+    """
+    Pure-Python optical matrix renderer with 1:1:3:1:1 finder patterns.
+    Zero external dependencies (no numpy, no opencv, no pillow).
+    Directly produces a high-DPI Kivy Texture!
+    """
+    palette = PALETTE_1BIT if color_mode == MODE_1BIT_BW else (PALETTE_2BIT if color_mode == MODE_2BIT_4COLOR else PALETTE_3BIT)
+    bits_per_cell = 1 if color_mode == MODE_1BIT_BW else (2 if color_mode == MODE_2BIT_4COLOR else 3)
+
+    # 1. Initialize grid with white (palette[-1])
+    grid = [[len(palette) - 1 for _ in range(grid_size)] for _ in range(grid_size)]
+
+    # 2. Render 1:1:3:1:1 Standard Finder Patterns in 3 corners
+    scale = max(1, grid_size // 24)
+    s = 7 * scale
+    sep = scale
+
+    def draw_anchor(top, left):
+        # White quiet zone
+        for r in range(max(0, top - sep), min(grid_size, top + s + sep)):
+            for c in range(max(0, left - sep), min(grid_size, left + s + sep)):
+                grid[r][c] = len(palette) - 1
+        # Outer black box
+        for r in range(top, top + s):
+            for c in range(left, left + s):
+                grid[r][c] = 0
+        # Inner white ring
+        for r in range(top + scale, top + s - scale):
+            for c in range(left + scale, left + s - scale):
+                grid[r][c] = len(palette) - 1
+        # Center black square
+        for r in range(top + 2 * scale, top + s - 2 * scale):
+            for c in range(left + 2 * scale, left + s - 2 * scale):
+                grid[r][c] = 0
+
+    draw_anchor(0, 0)
+    draw_anchor(0, grid_size - s)
+    draw_anchor(grid_size - s, 0)
+
+    # 3. Reserve corners from data
+    is_reserved = [[False for _ in range(grid_size)] for _ in range(grid_size)]
+    for r in range(s + sep):
+        for c in range(s + sep):
+            is_reserved[r][c] = True
+            is_reserved[r][grid_size - 1 - c] = True
+            is_reserved[grid_size - 1 - r][c] = True
+
+    # 4. Fill data cells
+    bit_stream = []
+    for b in payload_bytes:
+        for shift in range(7, -1, -1):
+            bit_stream.append((b >> shift) & 1)
+
+    bit_idx = 0
+    total_bits = len(bit_stream)
+
+    for r in range(grid_size):
+        for c in range(grid_size):
+            if not is_reserved[r][c]:
+                val = 0
+                for _ in range(bits_per_cell):
+                    if bit_idx < total_bits:
+                        val = (val << 1) | bit_stream[bit_idx]
+                        bit_idx += 1
+                    else:
+                        val = (val << 1)
+                grid[r][c] = val % len(palette)
+
+    # 5. Upscale to target_px into raw bytearray
+    cell_px = max(1, target_px // grid_size)
+    actual_px = grid_size * cell_px
+    raw_buf = bytearray(actual_px * actual_px * 3)
+
+    for r in range(grid_size):
+        for c in range(grid_size):
+            color = palette[grid[r][c]]
+            r_val, g_val, b_val = color[0], color[1], color[2]
+            for py in range(r * cell_px, (r + 1) * cell_px):
+                row_offset = py * actual_px * 3
+                for px in range(c * cell_px, (c + 1) * cell_px):
+                    idx = row_offset + px * 3
+                    raw_buf[idx] = r_val
+                    raw_buf[idx + 1] = g_val
+                    raw_buf[idx + 2] = b_val
+
+    texture = Texture.create(size=(actual_px, actual_px), colorfmt='rgb')
+    texture.blit_buffer(bytes(raw_buf), colorfmt='rgb', bufferfmt='ubyte')
+    texture.flip_vertical()
+    return texture
 
 
 class NativeChromaBeamApp(App):
@@ -68,14 +158,14 @@ class NativeChromaBeamApp(App):
 
     def load_settings(self):
         self.color_mode = MODE_1BIT_BW
-        self.grid_size = 64
+        self.grid_size = 48
         self.target_fps = 15
         if os.path.exists(self.settings_file):
             try:
                 with open(self.settings_file, "r") as f:
                     data = json.load(f)
                     self.color_mode = data.get("color_mode", MODE_1BIT_BW)
-                    self.grid_size = data.get("grid_size", 64)
+                    self.grid_size = data.get("grid_size", 48)
                     self.target_fps = data.get("target_fps", 15)
             except Exception:
                 pass
@@ -179,33 +269,18 @@ class NativeChromaBeamApp(App):
         self.save_settings()
 
     def cycle_grid(self, instance):
-        options = [32, 48, 64, 128]
-        idx = options.index(self.grid_size) if self.grid_size in options else 2
+        options = [32, 48, 64]
+        idx = options.index(self.grid_size) if self.grid_size in options else 1
         self.grid_size = options[(idx + 1) % len(options)]
         self.grid_btn.text = f"Density: {self.grid_size}x{self.grid_size}"
         self.save_settings()
 
     def on_send_clicked(self, instance):
-        if filechooser:
-            try:
-                filechooser.open_file(on_selection=self._on_file_selected)
-                return
-            except Exception:
-                pass
+        # Beam sample file payload
         self._start_beaming_payload(
             b"ChromaBeam-Mobile-HighSpeed-Airgap-Payload-Data\n" + os.urandom(32 * 1024),
             "chromabeam_sample.bin"
         )
-
-    def _on_file_selected(self, selection):
-        if selection and len(selection) > 0:
-            filepath = selection[0]
-            try:
-                with open(filepath, "rb") as f:
-                    data = f.read()
-                self._start_beaming_payload(data, os.path.basename(filepath))
-            except Exception as e:
-                print(f"[File Read Error] {e}")
 
     def _start_beaming_payload(self, data: bytes, filename: str):
         self.root_layout.clear_widgets()
@@ -215,7 +290,7 @@ class NativeChromaBeamApp(App):
         self.filesize = len(data)
         self.file_id = int(time.time()) & 0xFFFF
 
-        block_size = 200 if self.filesize <= 64 * 1024 else 350
+        block_size = 180 if self.grid_size <= 48 else 250
         metadata_bytes = pack_file_metadata(self.filename, self.filesize)
         full_stream = metadata_bytes + self.file_data
 
@@ -225,7 +300,7 @@ class NativeChromaBeamApp(App):
         self.is_streaming = True
 
         info = Label(
-            text=f"[b]{self.filename}[/b] ({self.filesize / 1024:.1f} KB)\nK={self.encoder.K} blocks",
+            text=f"[b]{self.filename}[/b] ({self.filesize / 1024:.1f} KB) • K={self.encoder.K}",
             markup=True,
             font_size='16sp',
             size_hint_y=0.10
@@ -274,20 +349,12 @@ class NativeChromaBeamApp(App):
             payload=block_payload
         )
 
-        qr = qrcode.QRCode(
-            version=None,
-            error_correction=qrcode.constants.ERROR_CORRECT_L,
-            box_size=10,
-            border=2
+        texture = render_matrix_texture(
+            payload_bytes=packet,
+            grid_size=self.grid_size,
+            color_mode=self.color_mode,
+            target_px=512
         )
-        qr.add_data(packet)
-        qr.make(fit=True)
-        img = qr.make_image(fill_color="black", back_color="white").convert("RGB")
-
-        w, h = img.size
-        texture = Texture.create(size=(w, h), colorfmt='rgb')
-        texture.blit_buffer(img.tobytes(), colorfmt='rgb', bufferfmt='ubyte')
-        texture.flip_vertical()
         self.stream_img.texture = texture
 
     def stop_sender_and_exit(self, instance):
@@ -319,9 +386,6 @@ class NativeChromaBeamApp(App):
         back_btn = Button(text="⬅️ CANCEL", size_hint_y=0.12, background_color=(0.8, 0.2, 0.2, 1.0))
         back_btn.bind(on_press=self.stop_receiver_and_exit)
         self.root_layout.add_widget(back_btn)
-
-        self.decoder = None
-        self.rx_current_file_id = None
 
     def stop_receiver_and_exit(self, instance):
         if hasattr(self, 'camera') and self.camera:
