@@ -1,27 +1,43 @@
-# ⚡ ChromaBeam (SpectrumDrop)
-### Ultra-High-Speed Optical File Transfer Protocol via 3-Bit RGB Fountain Codes
+<p align="center">
+  <img src="assets/icon.webp" alt="ChromaBeam Icon" width="130" style="border-radius: 50%;" />
+</p>
+
+# ChromaBeam — Ultra-High-Speed Air-Gapped Optical File Transfer
+
+<p align="center">
+  <a href="https://github.com/HenryCarm/ChromaBeam/releases"><img src="https://img.shields.io/github/v/release/HenryCarm/ChromaBeam?color=blue&style=for-the-badge" alt="Latest Release" /></a>
+  <a href="https://github.com/HenryCarm/ChromaBeam/actions"><img src="https://img.shields.io/github/actions/workflow/status/HenryCarm/ChromaBeam/build_and_release.yml?style=for-the-badge" alt="Build Status" /></a>
+  <img src="https://img.shields.io/badge/Platforms-Android%20%7C%20Windows%20%7C%20Linux%20%7C%20Web-emerald?style=for-the-badge" alt="Platforms" />
+  <img src="https://img.shields.io/badge/Air--Gap-100%25%20Offline-purple?style=for-the-badge" alt="Air-Gap Offline" />
+</p>
+
+<p align="center">
+  <img src="assets/banner.webp" alt="ChromaBeam Hero Banner" width="820" style="border-radius: 14px; box-shadow: 0 8px 30px rgba(0,0,0,0.5);" />
+</p>
 
 ---
 
-## 🌟 Overview
+## Overview
 
-**ChromaBeam** is a custom optical file transfer system designed to eliminate the bottlenecks of legacy monochrome QR streaming (which tops out at ~128 KB/s). By utilizing **3-bit RGB color multiplexing** and **Luby Transform (LT) Fountain Codes**, ChromaBeam pushes air-gapped optical throughput to **350–550+ KB/s** across screens and camera lenses.
+**ChromaBeam** is an optical air-gapped file transfer protocol designed to overcome the physical bottlenecks of legacy monochrome QR streaming (which tops out at ~128 KB/s). 
+
+By leveraging **3-bit RGB color multiplexing** and **Luby Transform (LT) Fountain Codes**, ChromaBeam delivers optical throughput of **350–550+ KB/s** across screens and camera lenses with zero physical cables, zero network access, and zero Bluetooth pairing.
 
 ---
 
-## 🚀 Key Advantages Over Standard QR Flashing
+## Key Advantages Over Standard QR Flashing
 
 | Feature | Standard QR Streaming (TXQR / QRFileTransfer) | ChromaBeam |
 |---|---|---|
-| **Color Density** | 1-bit Monochrome (Black / White) | **3-bit RGB Multiplexing** (8 distinct optical states per pixel) |
-| **Matrix Overhead** | Finder patterns & alignment grids consume ~40% of the screen | **4 Micro Corner Anchors** (92%+ screen payload utilization) |
-| **Packet Loss Resilience** | Dropped frames stall transfer or require large Reed-Solomon buffers | **Luby Transform Fountain Codes** (collect any $K(1+\epsilon)$ droplets in any order) |
-| **Parsing Speed** | Complex 2D barcode decode (~15–30 ms per frame) | **Instant Homography Perspective Warp & Center Sampling** ($<2$ ms per frame) |
+| **Color Density** | 1-bit Monochrome (Black / White) | **3-bit RGB Multiplexing** (8 distinct optical states per module) |
+| **Matrix Overhead** | Finder patterns & timing grids consume ~40% of the screen | **4 Scaled Corner Anchors** (92%+ screen payload density) |
+| **Packet Loss Resilience** | Dropped frames cause transmission stall or huge Reed-Solomon buffers | **Luby Transform Fountain Codes** (collect any $K(1+\epsilon)$ droplets in any order) |
+| **Decoding Latency** | Complex 2D barcode decode (~15–30 ms per frame) | **Instant Homography Perspective Warp & Center Sampling** ($<2$ ms per frame) |
 | **Throughput** | ~80–120 KB/s @ 30 FPS | **350–550+ KB/s @ 60 FPS** |
 
 ---
 
-## 📦 Protocol Binary Frame Specification
+## Protocol Binary Frame Specification
 
 ```
 +----------------+----------------+----------------+----------------+-------------------+----------------+
@@ -30,13 +46,13 @@
 +----------------+----------------+----------------+----------------+-------------------+----------------+
 ```
 
-- **Magic Bytes (`0x43, 0x42` - "CB")**: Instantly rejects out-of-focus or background noise frames.
-- **Droplet Seed**: Drives a deterministic 32-bit PRNG (`Mulberry32`) synchronized across Python and JavaScript to sample degree $d$ from the Robust Soliton distribution.
-- **CRC32**: Validates payload integrity, discarding motion-blurred or rolling-shutter frames before solving.
+- **Magic Bytes (`0x43, 0x42` - "CB")**: Instantly filters background noise, desktop wallpaper textures, and reflections.
+- **Droplet Seed**: Feeds a synchronized 32-bit PRNG (`Mulberry32`) across Python and JavaScript to sample degree $d$ from the Robust Soliton distribution.
+- **CRC32**: Validates payload integrity, discarding motion-blurred or rolling-shutter frames prior to Gaussian elimination.
 
 ---
 
-## 🎨 Optical RGB Color Encoding
+## Optical RGB Color Encoding
 
 | 3-Bit Value | Red (R) | Green (G) | Blue (B) | Visual Color | Hex |
 |:---:|:---:|:---:|:---:|:---:|:---:|
@@ -51,44 +67,34 @@
 
 ---
 
-## 💻 Quick Start & Usage
+## Quick Start & Usage
 
-### 1. Launch the Desktop Sender (PyQt6)
-To run the high-speed Python desktop sender on Linux Mint, Windows, or macOS:
+### 1. Launch Desktop Application (PySide6)
+To launch the desktop transmitter and receiver on Linux or Windows:
 
 ```bash
-/home/henry/Documents/Projects/Python/venv/bin/python desktop_sender/main.py
+/home/henry/Documents/Projects/Python/venv/bin/python desktop_app.py
 ```
-- Click **"Choose File..."** or use the built-in demo payload.
-- Adjust matrix density (`32x32`, `48x48`, `64x64`) and frame rate (`15` to `60 FPS`).
-- Click **"🚀 START OPTICAL BEAM"**.
 
-### 2. Launch the Universal Mobile / Web App (Zero Install)
-To beam directly to an Android phone or any web browser:
+### 2. Launch Universal Mobile / Web App (Zero Install)
+To beam to any mobile phone without installing an app:
 
 ```bash
 /home/henry/Documents/Projects/Python/venv/bin/python web/server.py
 ```
-- Open `http://<YOUR_LAN_IP>:8080` on your mobile phone's browser (Chrome, Brave, Firefox, Safari).
-- Switch to the **"📸 Optical Receiver"** tab and tap **"START CAMERA RECEIVER"**.
-- Point the phone at the sender screen $\rightarrow$ Watch the fountain solver progress fill $\rightarrow$ Reconstructed file downloads automatically!
+- Open `http://<YOUR_LAN_IP>:8080` in Chrome, Safari, Brave, or Firefox.
+- Switch to the **"Optical Receiver"** tab and tap **"START CAMERA RECEIVER"**.
+- Aim at the sender screen $\rightarrow$ droplets assemble $\rightarrow$ file saves automatically!
 
-### 3. Run Desktop OpenCV Receiver (Webcam to PC)
-To receive files via a PC webcam:
+### 3. Build & Deploy Hub (GUI)
+To monitor cloud builds and install the Android `.apk` via ADB with one click:
 
 ```bash
-/home/henry/Documents/Projects/Python/venv/bin/python desktop_receiver/receiver_gui.py
+/home/henry/Documents/Projects/Python/venv/bin/python build_monitor_gui.py
 ```
 
 ---
 
-## 🧪 Automated Test Suite
-
-Run the full unit and stress test suite:
-
-```bash
-/home/henry/Documents/Projects/Python/venv/bin/python -m unittest discover -s tests
-```
-- Verifies mathematical Luby Transform fountain code recovery under 40% packet drop rates.
-- Validates binary frame serialization and CRC32 integrity checks.
-- Validates 3-bit RGB color bitstream packing and homography sampling.
+<p align="center">
+  <img src="assets/banner_green.webp" alt="ChromaBeam Footer Banner" width="820" style="border-radius: 14px;" />
+</p>
