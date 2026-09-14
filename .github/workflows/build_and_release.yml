@@ -4,8 +4,6 @@ on:
   push:
     tags:
       - 'v*'
-    branches:
-      - main
   workflow_dispatch:
 
 permissions:
@@ -147,10 +145,16 @@ jobs:
           yes | buildozer android debug
 
       - name: Rename and Upload APK
+        run: |
+          mkdir -p release_apk
+          cp bin/*.apk release_apk/qrchromabeam-${{ github.ref_name }}-arm64-v8a-debug.apk
+        shell: bash
+
+      - name: Upload Android Artifact
         uses: actions/upload-artifact@v4
         with:
           name: android-apk
-          path: bin/*.apk
+          path: release_apk/*.apk
 
   # =================================================================
   # 4. GITHUB RELEASE PUBLISHER
@@ -190,15 +194,25 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: release_assets/*
-          name: "ChromaBeam ${{ github.ref_name }}"
+          name: "ChromaBeam - Optical File Transfer ${{ github.ref_name }}"
           body: |
-            ## ⚡ ChromaBeam Multi-Platform Release
-            High-Speed Optical File Transfer Protocol (350–550+ KB/s) via 3-bit RGB Fountain Codes.
+            <p align="center">
+              <img src="https://raw.githubusercontent.com/HenryCarm/ChromaBeam/main/assets/banner.webp" alt="ChromaBeam Banner" width="820" style="border-radius: 14px;" />
+            </p>
 
-            ### 📦 Included Release Packages:
-            - 🐧 **Linux Mint / Ubuntu**: `ChromaBeam-Linux-x86_64` (Onefile) & `ChromaBeam-Linux-x86_64-Standalone.tar.gz`
-            - 🪟 **Windows x64**: `ChromaBeam-Windows-x64.exe` (Onefile) & `ChromaBeam-Windows-x64-Standalone.zip`
-            - 📱 **Android Phone**: `ChromaBeam-1.0.0-debug.apk`
-            - 🌐 **100% Offline Universal Web App**: `ChromaBeam-Offline-Universal.html` (Open on ANY phone or PC in airplane mode!)
+            # ChromaBeam — High-Speed Optical File Transfer ${{ github.ref_name }}
+
+            Next-generation optical air-gapped file transfer suite with adaptive multi-mode encoding (High-Speed 3-bit RGB, Balanced 4-Color, and 1-bit Potato-Camera B&W), robust 1:1:1:1:1 nested-square finder pattern tracking, 360° homography, and Luby Transform fountain decoding.
+
+            ### Binary Downloads
+
+            | Platform | Package Type | Filename | Description |
+            |:---|:---|:---|:---|
+            | 📱 **Android** | Native APK | `qrchromabeam-${{ github.ref_name }}-arm64-v8a-debug.apk` | Pure Python/Kivy mobile optical scanner |
+            | 🪟 **Windows** | Portable Executable | `ChromaBeam-Windows-x64.exe` | Single-file portable (.exe) |
+            | 🪟 **Windows** | Standalone Directory | `ChromaBeam-Windows-x64-Standalone.zip` | Fast startup folder distribution |
+            | 🐧 **Linux** | Portable Executable | `ChromaBeam-Linux-x86_64` | Single-file binary |
+            | 🐧 **Linux** | Standalone Directory | `ChromaBeam-Linux-x86_64-Standalone.tar.gz` | Fast startup archive |
+            | 🌐 **Universal** | Zero-Install Offline HTML | `ChromaBeam-Offline-Universal.html` | Works in any browser without install |
           draft: false
           prerelease: false

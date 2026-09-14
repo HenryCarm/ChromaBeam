@@ -34,7 +34,7 @@ version = 269.15.0
 android.numeric_version = 2691500
 
 # (list) Application requirements
-requirements = python3,kivy,android,pyjnius
+requirements = python3,kivy,android,pyjnius,charset-normalizer==3.4.3
 
 # (list) Supported architectures
 android.archs = arm64-v8a
