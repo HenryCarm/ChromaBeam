@@ -18,6 +18,8 @@ source.include_exts = py,png,jpg,kv,atlas,html,js,css,json,ico
 # (list) List of directory to exclude (let empty to not exclude anything)
 source.exclude_dirs = dist,scripts,.git,.github,desktop_receiver,desktop_sender,__pycache__,tests,.agents
 
+# (list) Exclude patterns to prevent packing desktop code, logs and tests into the APK
+source.exclude_patterns = *.txt,*.log,*.tar.gz,*.zip,*.js,*.sh,build_monitor_gui.py,desktop_app.py,debug_loopback.py,test_*.py,patch*.py
 
 # (str) Icon of the application
 icon.filename = %(source.dir)s/assets/icon.png
@@ -26,10 +28,10 @@ icon.filename = %(source.dir)s/assets/icon.png
 presplash.filename = %(source.dir)s/assets/icon.png
 
 # (str) Application versioning
-version = 1.0.0
+version = 269.15.0
 
 # (int) 32-bit safe numeric version (Learned Invariant to prevent Gradle integer overflow)
-android.numeric_version = 2680317
+android.numeric_version = 2691500
 
 # (list) Application requirements
 requirements = python3,kivy,android,pyjnius
