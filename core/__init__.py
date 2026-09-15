@@ -18,15 +18,20 @@ from .fountain import (
     get_droplet_indices,
     get_robust_soliton_cdf
 )
-from .color_matrix import (
-    ColorMatrixLayout,
-    PALETTE_1BIT,
-    PALETTE_2BIT,
-    PALETTE_3BIT,
-    MODE_1BIT_BW,
-    MODE_2BIT_4COLOR,
-    MODE_3BIT_8COLOR,
-    bytes_to_color_grid,
-    color_grid_to_bytes,
-    upscale_grid_for_display
-)
+try:
+    from .color_matrix import (
+        ColorMatrixLayout,
+        PALETTE_1BIT,
+        PALETTE_2BIT,
+        PALETTE_3BIT,
+        MODE_1BIT_BW,
+        MODE_2BIT_4COLOR,
+        MODE_3BIT_8COLOR,
+        bytes_to_color_grid,
+        color_grid_to_bytes,
+        upscale_grid_for_display
+    )
+except ImportError:
+    # Optional on lightweight mobile platforms where numpy/opencv are not packaged
+    pass
+
