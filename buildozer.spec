@@ -34,7 +34,7 @@ version = 269.15.0
 android.numeric_version = 2691500
 
 # (list) Application requirements
-requirements = python3,kivy,android,pyjnius,charset-normalizer==3.4.3
+requirements = python3,kivy==2.2.1,pyjnius
 
 # (list) Supported architectures
 android.archs = arm64-v8a
@@ -45,17 +45,26 @@ android.permissions = CAMERA,READ_EXTERNAL_STORAGE,WRITE_EXTERNAL_STORAGE,MANAGE
 # (bool) Automatically accept Android SDK license
 android.accept_sdk_license = True
 
+# (bool) Enable AndroidX
+android.enable_androidx = True
+
 # (int) Target Android API
 android.api = 33
 
 # (int) Minimum API supported
-android.minapi = 24
+android.minapi = 26
+
+# (int) Android NDK API version
+android.ndk_api = 26
 
 # (int) Android SDK version to use
 android.sdk = 33
 
 # (str) Android NDK version to use
 android.ndk = 25b
+
+# (str) python-for-android branch to use
+p4a.branch = v2024.01.21
 
 # (bool) Use --private data storage (True) or --dir public storage (False)
 android.private_storage = True
