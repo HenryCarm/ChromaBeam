@@ -28,11 +28,11 @@ icon.filename = %(source.dir)s/assets/icon.png
 presplash.filename = %(source.dir)s/assets/icon.png
 
 # (str) Application versioning
-version = 269.15.2
+version = 269.15.3
 
 
 # (int) 32-bit safe numeric version (Learned Invariant to prevent Gradle integer overflow)
-android.numeric_version = 2691520
+android.numeric_version = 2691530
 
 
 # (list) Application requirements
