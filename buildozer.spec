@@ -7,7 +7,7 @@ title = QR ChromaBeam
 package.name = qrchromabeam
 
 # (str) Package domain (needed for android/ios packaging)
-package.domain = org.henry.qrchromabeam
+package.domain = henryjayz.celsuite
 
 # (str) Source code where the main.py lives
 source.dir = .
@@ -28,10 +28,12 @@ icon.filename = %(source.dir)s/assets/icon.png
 presplash.filename = %(source.dir)s/assets/icon.png
 
 # (str) Application versioning
-version = 269.15.1
+version = 269.15.2
+
 
 # (int) 32-bit safe numeric version (Learned Invariant to prevent Gradle integer overflow)
-android.numeric_version = 2691510
+android.numeric_version = 2691520
+
 
 # (list) Application requirements
 requirements = python3,kivy==2.2.1,pyjnius
