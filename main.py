@@ -26,16 +26,7 @@ from kivy.clock import Clock
 from kivy.graphics.texture import Texture
 from kivy.utils import platform
 
-if platform == 'android':
-    try:
-        from android.permissions import request_permissions, Permission
-        request_permissions([
-            Permission.CAMERA,
-            Permission.READ_EXTERNAL_STORAGE,
-            Permission.WRITE_EXTERNAL_STORAGE
-        ])
-    except Exception as e:
-        print(f"[Android Permissions] {e}")
+# Android permissions securely requested in on_start to prevent SDL Native Link Crash
 
 from core.protocol import (
     pack_packet, unpack_packet,
@@ -147,6 +138,18 @@ def render_matrix_texture(payload_bytes: bytes, grid_size: int = 48, color_mode:
 
 
 class NativeChromaBeamApp(App):
+    def on_start(self):
+        if platform == 'android':
+            try:
+                from android.permissions import request_permissions, Permission
+                request_permissions([
+                    Permission.CAMERA,
+                    Permission.READ_EXTERNAL_STORAGE,
+                    Permission.WRITE_EXTERNAL_STORAGE
+                ])
+            except Exception as e:
+                print(f"[Android Permissions] {e}")
+
     def build(self):
         self.title = "QR ChromaBeam"
         self.settings_file = os.path.join(self.user_data_dir, "chromabeam_settings.json")

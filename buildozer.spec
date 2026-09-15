@@ -28,10 +28,10 @@ icon.filename = %(source.dir)s/assets/icon.png
 presplash.filename = %(source.dir)s/assets/icon.png
 
 # (str) Application versioning
-version = 269.15.0
+version = 269.15.1
 
 # (int) 32-bit safe numeric version (Learned Invariant to prevent Gradle integer overflow)
-android.numeric_version = 2691500
+android.numeric_version = 2691510
 
 # (list) Application requirements
 requirements = python3,kivy==2.2.1,pyjnius
